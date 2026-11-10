@@ -2,6 +2,12 @@
 
 All notable changes per session. Keep newest at top.
 
+## 2026-11-10 — v0.1.1
+
+- Traducidas todas las cadenas de usuario del ruso al español en los 12 archivos afectados: `chat.py`, `commands.py`, `game_client.py`, `gui.py`, `gui_onyx.py`, `gui_support.py`, `gui_worker.py`, `joiner.py`, `mass.py`, `relay.py`, `scan_processes.py`, `scanner_health.py`
+- Términos técnicos conservados en inglés: `workers`, `scanner`, `log`, `Featured`, `JobID`, `UserId`, `Place ID`, `VIP link`, `Humanoid`, `teleport`, `reconnect`, `rate limit`, `income`, `root part`, `schema`, `tab`, etc.
+- `compileall` limpio: cero errores de sintaxis tras la traducción
+
 ## 2026-11-10 — v0.1
 
 - Adopted the **Rakbot** source at `C:\Users\Administrator\Pictures\some shi\` as the Curry Launcher v0.1 baseline

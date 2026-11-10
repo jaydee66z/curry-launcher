@@ -465,16 +465,16 @@ class GameClient(NativeClient):
             raise CommandError(blocked)
         now = time.monotonic()
         if now - self._last_chat_at < 1 and not self._queued_chat:
-            raise CommandError('Подожди одну секунду между сообщениями chat.')
+            raise CommandError('Espera un segundo entre mensajes de chat.')
         if len(self._pending_chat) + len(self._queued_chat) >= 16:
-            raise CommandError('Ожидаю ответы сервера на предыдущие сообщения chat.')
+            raise CommandError('Esperando respuestas del servidor a los mensajes de chat previos.')
         message_id = new_message_id(self.info.account.user_id)
         try:
             request = self._prepare_chat(text, message_id)
         except ChatUnavailable as error:
             request, waiting = None, str(error)
         else:
-            waiting = 'Ожидаю отправки предыдущих сообщений.'
+            waiting = 'Esperando el envío de los mensajes anteriores.'
         self._last_chat_at = now
         if request is None or self._queued_chat or now - self._last_chat_wire_at < 1:
             public = {'state': 'waiting_for_chat', 'message_id': message_id, 'channel': 'Here',
@@ -492,7 +492,7 @@ class GameClient(NativeClient):
                 any(e['name'] == 'ReconcileCommunicationAccessCompleted' and
                     self.schema.classes[e['class_id']]['name'] == 'Chat' and
                     [a['type'] for a in e['arguments']] == [2] for e in self.schema.events)):
-            raise ChatUnavailable('Ожидаю завершения инициализации доступа к чату.')
+            raise ChatUnavailable('Esperando a que termine la inicialización del acceso al chat.')
         # Here is the current server's RBXGeneral. Allocation of a universe
         # Global channel must never change the destination of a chat command.
         return prepare(self.world, self.info.account.user_id, text, message_id)
@@ -621,7 +621,7 @@ class GameClient(NativeClient):
             fields['for_moderation'] = update['for_moderation']
         if status == 6:
             fields['message'] = (self._chat_block_reason() or
-                'Roblox отклонил сообщение из-за настроек доступа аккаунта к чату (InvalidPrivacySettings).')
+                'Roblox rechazó el mensaje debido a la configuración de acceso al chat de la cuenta (InvalidPrivacySettings).')
             if self.chat_access['communication_status'] is not None:
                 fields['communication_status'] = self.chat_access['communication_status']
         filtered = update.get('text')
@@ -637,7 +637,7 @@ class GameClient(NativeClient):
 
     def _chat_block_reason(self):
         if self.chat_access['communication_status'] == 'GeoBlocked':
-            return 'Roblox отключил чат для этого подключения: GeoBlocked (региональное ограничение).'
+            return 'Roblox desactivó el chat para esta conexión: GeoBlocked (restricción regional).'
         return None
 
     def _poll_refinement(self):
@@ -673,7 +673,7 @@ class GameClient(NativeClient):
     def start_loop(self, nickname):
         import re
         if not re.fullmatch(r'[A-Za-z0-9_]{1,20}', nickname):
-            raise CommandError('Укажи username или его однозначный префикс.')
+            raise CommandError('Especifica el username o un prefijo inequívoco.')
         user_id = None
         try:
             _, player, nickname = resolve_player(self, nickname)
@@ -681,7 +681,7 @@ class GameClient(NativeClient):
         except PlayerUnavailable:
             pass
         if user_id == self.info.account.user_id:
-            raise CommandError('Выбери другого игрока.')
+            raise CommandError('Elige otro jugador.')
         self._refine_teleport = None
         self._loop_tp = {'target': nickname, 'user_id': user_id, 'interval_seconds': 1.0,
                          'state': 'starting', 'requests_sent': 0, 'last_error': None, 'next_at': 0}
@@ -704,7 +704,7 @@ class GameClient(NativeClient):
             _, player, username = resolve_player(self, loop['target'])
             user_id = player['props']['UserId']
             if loop['user_id'] is not None and loop['user_id'] != user_id:
-                raise CommandError('Исходный игрок покинул сервер. Ожидаю его возвращения.')
+                raise CommandError('El jugador origen abandonó el servidor. Esperando su regreso.')
             loop['target'], loop['user_id'] = username, user_id
             result = self.teleport(username, _loop=True)
             loop['requests_sent'] += 1
@@ -729,7 +729,7 @@ class GameClient(NativeClient):
             self._physics_layout[node['class']] = layout
         cid, property_count, pv = layout
         if pv is None:
-            raise CommandError('Схема ISR не содержит физику корневой части персонажа.')
+            raise CommandError('El schema ISR no contiene la física de la root part del personaje.')
         frame = self.world.last_isr_frame
         if self._isr_out_frame is not None and ((frame - self._isr_out_frame) & 0xffffffff) == 0:
             frame = (frame + 1) & 0xffffffff
@@ -767,7 +767,7 @@ class GameClient(NativeClient):
             position_at = self.world.position_observed.get(target['root'])
             if (valid_region and region_at is not None and position_at is not None and
                     region_at > position_at and tuple(math.floor(v / 64) for v in target['position']) != tuple(region)):
-                raise CommandError('Ожидаю точную позицию игрока в новой области.')
+                raise CommandError('Esperando la posición exacta del jugador en la nueva área.')
             return target, False
         except CommandError:
             if not valid_region or self.world.last_isr_frame is None:
@@ -778,20 +778,20 @@ class GameClient(NativeClient):
 
     def teleport(self, nickname, *, _loop=False):
         if not self.world or not self.world.character_evidence()['character_spawn_confirmed']:
-            raise CommandError('Персонаж бота ещё не готов: модель, Humanoid и корневая часть не подтверждены. Проверь status.')
+            raise CommandError('El personaje del bot aún no está listo: modelo, Humanoid y root part no confirmados. Verifica status.')
         if getattr(self.schema, 'isr', None) and self.world.last_isr_frame is None:
-            raise CommandError('Дождись синхронизации физики: status должен показать movement_ready: true.')
+            raise CommandError('Espera la sincronización de física: status debe mostrar movement_ready: true.')
         if not _loop and time.monotonic() - self._last_teleport_at < 1:
-            raise CommandError('Подожди одну секунду между запросами ТП.')
+            raise CommandError('Espera un segundo entre solicitudes de teleport.')
         target, coarse = self._target_position(nickname)
         _, own, _ = resolve_player(self)
         if target['user_id'] == self.info.account.user_id:
-            raise CommandError('Выбери другого игрока.')
+            raise CommandError('Elige otro jugador.')
         recent_isr = (self.world.isr_received_at is not None and
                       time.monotonic() - self.world.isr_received_at <= 3)
         if not coarse and (target['age_seconds'] is None or
                            (target['age_seconds'] > 5 and not (_loop and recent_isr))):
-            raise CommandError('Позиция игрока устарела. ТП по старым координатам не отправлен.')
+            raise CommandError('La posición del jugador está desactualizada. No se envió teleport con coordenadas viejas.')
         root, _ = root_for(self, own)
         destination = (target['position'][0] + 2.5, target['position'][1] + 0.5, target['position'][2])
         own_position = position_for(self)
@@ -867,7 +867,7 @@ class GameClient(NativeClient):
                     self.last_teleport['state'] = 'connection_lost_unconfirmed'
                     self._pending_teleport = None
                 self._command_result({'command': 'connection', 'state': 'disconnected',
-                                      'message': 'Сервер не подтвердил надёжные пакеты; соединение завершено.',
+                                      'message': 'El servidor no confirmó los paquetes reliable; la conexión se terminó.',
                                       'ack_timeout': self.ack_timeout})
                 self._expire_chat(closing=True)
                 return self.summary()

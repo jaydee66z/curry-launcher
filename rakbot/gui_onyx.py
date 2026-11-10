@@ -272,7 +272,7 @@ def build(app):
     app.status_dot.place(x=166, y=13)
     app.status_dot.create_oval(1, 1, 11, 11, fill='#626262', outline='', tags='dot')
     def state_changed(*_):
-        color = '#22d45b' if app.status.get() == 'Работает' else '#eea84b' if '…' in app.status.get() else '#ed6464' if app.status.get() == 'Ошибка' else '#626262'
+        color = '#22d45b' if app.status.get() == 'Funcionando' else '#eea84b' if '…' in app.status.get() else '#ed6464' if app.status.get() == 'Error' else '#626262'
         app.status_dot.itemconfigure('dot', fill=color)
     app.status.trace_add('write', state_changed)
     label(brand, 'Brainrot scanner', size=11, color=MUTED).pack(anchor='w')
@@ -287,28 +287,28 @@ def build(app):
         app.nav_scanner.configure(selected=page == 'scanner')
         app.nav_settings.configure(selected=page == 'settings')
     app.show_page = show
-    app.nav_scanner = Button(side, text='Сканер', symbol='search', selected=True, height=48,
+    app.nav_scanner = Button(side, text='Scanner', symbol='search', selected=True, height=48,
                              align='left', command=lambda: show('scanner'), font=('Segoe UI Semibold', 12))
     app.nav_scanner.pack(fill='x', pady=(7, 4))
-    app.nav_settings = Button(side, text='Настройки', symbol='gear', align='left', border=False,
+    app.nav_settings = Button(side, text='Ajustes', symbol='gear', align='left', border=False,
                               height=44, command=lambda: show('settings'), font=('Segoe UI', 12))
     app.nav_settings.pack(fill='x')
     tk.Frame(side, bg=BORDER, height=1).pack(fill='x', pady=(17, 14))
 
     actions = tk.Frame(side, bg=BG)
     actions.pack(side='bottom', fill='x')
-    app.start_button = Button(actions, text='Старт', symbol='play', primary=True,
+    app.start_button = Button(actions, text='Iniciar', symbol='play', primary=True,
                               command=app.start, height=54, font=('Segoe UI Semibold', 12))
     app.start_button.pack(fill='x', pady=(0, 10))
-    app.stop_button = Button(actions, text='Остановить', symbol='stop', state='disabled',
+    app.stop_button = Button(actions, text='Detener', symbol='stop', state='disabled',
                              command=app.stop, height=54, font=('Segoe UI Semibold', 11))
     app.stop_button.pack(fill='x')
-    label(side, 'Параметры сканера', color=MUTED, size=11).pack(anchor='w', pady=(0, 9))
+    label(side, 'Parámetros del scanner', color=MUTED, size=11).pack(anchor='w', pady=(0, 9))
     numbers = tk.Frame(side, bg=BG)
     numbers.pack(fill='x')
     numbers.columnconfigure((0, 1), weight=1, uniform='numbers')
-    for n, (title, variable) in enumerate((('Аккаунты', app.accounts), ('Workers', app.workers),
-                                          ('Группы', app.groups), ('Загрузки', app.inflight))):
+    for n, (title, variable) in enumerate((('Cuentas', app.accounts), ('Workers', app.workers),
+                                          ('Grupos', app.groups), ('Cargas', app.inflight))):
         card = Panel(numbers, height=84, padding=9, radius=12)
         card.grid(row=n//2, column=n%2, sticky='ew', padx=(0 if n%2 == 0 else 5, 5 if n%2 == 0 else 0), pady=(0, 10))
         label(card.body, title, size=10, color=MUTED).pack(anchor='w', pady=(0, 4))
@@ -318,16 +318,16 @@ def build(app):
             entry = ttk.Spinbox(field.body, textvariable=variable, from_=1, to=MAX_ACCOUNTS if n == 0 else 9999,
                                 width=4, style='Onyx.TSpinbox', font=('Segoe UI', 11))
         else:
-            entry = ttk.Combobox(field.body, textvariable=variable, values=('Авто', '1', '2', '4', '8', '16', '30'),
+            entry = ttk.Combobox(field.body, textvariable=variable, values=('Auto', '1', '2', '4', '8', '16', '30'),
                                  width=4, style='Onyx.TCombobox', font=('Segoe UI', 11))
         entry.pack(fill='both', expand=True)
         app.inputs.append(entry)
-    label(side, 'Файлы', size=11, color=MUTED).pack(anchor='w', pady=(8, 9))
+    label(side, 'Archivos', size=11, color=MUTED).pack(anchor='w', pady=(8, 9))
     for variable, kind in ((app.cookies, 'cookies'), (app.config, 'config')):
         button = Button(side, text=Path(variable.get()).name, symbol='file', end_symbol='folder', align='left', height=44,
                         command=lambda v=variable, k=kind: choose_file(app, v, k))
         button.pack(fill='x', pady=(0, 9))
-        variable.trace_add('write', lambda *_, v=variable, b=button: b.configure(text=Path(v.get()).name or 'Выбрать файл'))
+        variable.trace_add('write', lambda *_, v=variable, b=button: b.configure(text=Path(v.get()).name or 'Elegir archivo'))
         app.inputs.append(button)
 
     main = app.scanner_page
@@ -347,8 +347,8 @@ def build(app):
     stats = tk.Frame(main, bg=BG)
     app.stats_panel=stats
     stats.grid(row=1, column=0, sticky='ew', pady=(0, 16))
-    for n, (title, variable, symbol) in enumerate((('Серверы', app.servers, 'server'),
-            ('Время', app.elapsed, 'clock'), ('Featured', app.featured, 'star'))):
+    for n, (title, variable, symbol) in enumerate((('Servidores', app.servers, 'server'),
+            ('Tiempo', app.elapsed, 'clock'), ('Featured', app.featured, 'star'))):
         stats.columnconfigure(n, weight=1, uniform='stats')
         card = Panel(stats, height=106, radius=16, padding=16)
         card.grid(row=0, column=n, sticky='ew', padx=(0, 16 if n < 2 else 0))
@@ -367,18 +367,18 @@ def build(app):
     badge = tk.Canvas(best.body, width=35, height=32, bg=PANEL, bd=0, highlightthickness=0)
     badge.pack(side='left', padx=(0, 12))
     icon(badge, 'trophy', 17, 15, size=23, color='#c5c8ce')
-    label(best.body, 'Лучший:', color=MUTED, size=14).pack(side='left', padx=(0, 7))
+    label(best.body, 'Mejor:', color=MUTED, size=14).pack(side='left', padx=(0, 7))
     label(best.body, variable=app.best, bold=True, size=14).pack(side='left')
     app.joiner_target_panel=Panel(main,height=104,padding=12,radius=15)
     target=app.joiner_target_panel.body
-    for column,(title,variable) in enumerate((('Place ID / ссылка на игру',app.join_place),
-            ('JobID (необязательно)',app.join_server),('VIP link (вместо Place ID)',app.join_vip))):
+    for column,(title,variable) in enumerate((('Place ID / enlace al juego',app.join_place),
+            ('JobID (opcional)',app.join_server),('VIP link (en vez de Place ID)',app.join_vip))):
         target.columnconfigure(column,weight=1,uniform='target')
         label(target,title,size=9,color=MUTED).grid(row=0,column=column,sticky='w',padx=(0,8),pady=(0,3))
         entry=ttk.Entry(target,textvariable=variable,style='Onyx.TEntry',width=10)
         entry.grid(row=1,column=column,sticky='ew',padx=(0,8))
         app.inputs.append(entry)
-    label(target,'JobID требует Place ID. Все аккаунты входят на один сервер; переподключение — на тот же JobID.',
+    label(target,'JobID requiere Place ID. Todas las cuentas entran al mismo servidor; el reconnect es al mismo JobID.',
         size=8,color=MUTED).grid(row=2,column=0,columnspan=3,sticky='w',pady=(5,0))
 
     featured = Panel(main, radius=16, padding=18)
@@ -403,7 +403,7 @@ def build(app):
     app.clear_featured_button=Button(controls,text='Clear',width=75,height=36,command=app.clear_featured,font=('Segoe UI',10))
     app.clear_featured_button.pack(side='left')
     app.joiner_actions=tk.Frame(header,bg=PANEL)
-    app.join_scope_box=ttk.Combobox(app.joiner_actions,textvariable=app.join_scope,values=('Все аккаунты',),
+    app.join_scope_box=ttk.Combobox(app.joiner_actions,textvariable=app.join_scope,values=('Todas las cuentas',),
         style='Onyx.TCombobox',state='readonly',width=14)
     app.join_scope_box.pack(side='left',padx=(0,8))
     Button(app.joiner_actions,text='Stop LoopTp',width=110,height=36,
@@ -416,7 +416,7 @@ def build(app):
     app.result_footer=footer
     footer.pack(side='bottom', fill='x', pady=(14, 0))
     label(footer, variable=app.page_label, color=MUTED, size=10).pack(side='left')
-    Button(footer, text='Копировать JobID', symbol='copy', width=185, height=40,
+    Button(footer, text='Copiar JobID', symbol='copy', width=185, height=40,
            command=app.copy_job, font=('Segoe UI', 10)).pack(side='right', padx=(14, 0))
     pagination = tk.Frame(footer, bg=PANEL)
     app.pagination=pagination
@@ -431,11 +431,11 @@ def build(app):
     app.next = Button(pagination, text='›', width=34, height=38, command=lambda: app.change_page(1), font=('Segoe UI', 18))
     app.next.pack(side='left', padx=3)
     app.joiner_command_bar=tk.Frame(featured.body,bg=PANEL)
-    label(app.joiner_command_bar,'Команда',size=9,color=MUTED).pack(side='left',padx=(0,8))
+    label(app.joiner_command_bar,'Comando',size=9,color=MUTED).pack(side='left',padx=(0,8))
     command=ttk.Entry(app.joiner_command_bar,textvariable=app.join_line,style='Onyx.TEntry')
     command.pack(side='left',fill='x',expand=True)
     command.bind('<Return>',lambda event:app.send_join_command())
-    Button(app.joiner_command_bar,text='Отправить',width=100,height=34,command=app.send_join_command,
+    Button(app.joiner_command_bar,text='Enviar',width=100,height=34,command=app.send_join_command,
         font=('Segoe UI',10)).pack(side='right',padx=(8,0))
     table = Panel(featured.body, radius=10, padding=5)
     table.pack(fill='both', expand=True)
@@ -444,8 +444,8 @@ def build(app):
     columns = ('time', 'pet', 'generation', 'job', 'copy')
     app.tree = ttk.Treeview(table.body, columns=columns, show='headings', selectmode='browse',
                             height=5, style='Onyx.Treeview')
-    for key, title, width, minimum, stretch in (('time', 'Время', 120, 95, False),
-            ('pet', 'Пет / мутация', 290, 180, True), ('generation', 'Доход', 150, 100, False),
+    for key, title, width, minimum, stretch in (('time', 'Tiempo', 120, 95, False),
+            ('pet', 'Pet / mutación', 290, 180, True), ('generation', 'Income', 150, 100, False),
             ('job', 'JobID', 250, 140, True), ('copy', '', 34, 34, False)):
         app.tree.heading(key, text=title, anchor='w')
         app.tree.column(key, width=width, minwidth=minimum, stretch=stretch, anchor='w')
@@ -469,21 +469,21 @@ def build(app):
     app.tree.bind('<Button-3>',app.player_menu)
     app.player_actions=tk.Menu(root,tearoff=False,bg=FIELD,fg=TEXT,activebackground='#292929',
         activeforeground=TEXT,bd=0,font=('Segoe UI',11))
-    app.empty_history = label(table.body, 'Здесь появятся найденные Featured', color='#686b72', size=11)
+    app.empty_history = label(table.body, 'Aquí aparecerán los Featured encontrados', color='#686b72', size=11)
     app.empty_history.place(relx=.5, rely=.55, anchor='center')
 
     log_panel = Panel(main, height=132, radius=16, padding=12)
     log_panel.grid(row=4, column=0, sticky='ew')
     log_head = tk.Frame(log_panel.body, bg=PANEL)
     log_head.pack(fill='x', pady=(0, 8))
-    label(log_head, 'Лог', bold=True, size=11).pack(side='left')
+    label(log_head, 'Log', bold=True, size=11).pack(side='left')
     label(log_head, variable=app.account_status, color='#777b83', size=8).pack(side='left', padx=15)
-    Button(log_head, text='Очистить', command=app.clear_log, height=24, width=75,
+    Button(log_head, text='Limpiar', command=app.clear_log, height=24, width=75,
            border=False, font=('Segoe UI', 9)).pack(side='right')
-    app.logs_button=Button(log_head,text='Файлы логов',command=app.open_logs,height=24,width=95,
+    app.logs_button=Button(log_head,text='Archivos de logs',command=app.open_logs,height=24,width=95,
         border=False,font=('Segoe UI',9))
     app.logs_button.pack(side='right',padx=(4,0))
-    app.health_button=Button(log_head,text='Статусы',command=app.show_health,height=24,width=70,
+    app.health_button=Button(log_head,text='Estados',command=app.show_health,height=24,width=70,
         border=False,font=('Segoe UI',9))
     app.health_button.pack(side='right',padx=(4,0))
     log_box = tk.Frame(log_panel.body, bg=PANEL)
@@ -504,8 +504,8 @@ def build(app):
 
 
 def choose_file(app, variable, kind):
-    path = filedialog.askopenfilename(parent=app.root, title='Файл аккаунтов' if kind == 'cookies' else 'Конфигурация',
-        initialdir=app.base, filetypes=[('Текстовые файлы', '*.txt'), ('JSON', '*.json'), ('Все файлы', '*.*')])
+    path = filedialog.askopenfilename(parent=app.root, title='Archivo de cuentas' if kind == 'cookies' else 'Configuración',
+        initialdir=app.base, filetypes=[('Archivos de texto', '*.txt'), ('JSON', '*.json'), ('Todos los archivos', '*.*')])
     if path:
         variable.set(path)
         if kind == 'config':
@@ -514,31 +514,31 @@ def choose_file(app, variable, kind):
 
 def build_settings(app):
     page = app.settings_page
-    label(page, 'Настройки', size=24, bold=True).pack(anchor='w', pady=(5, 5))
-    label(page, 'Параметры слева применяются при следующем запуске.', color=MUTED).pack(anchor='w', pady=(0, 24))
+    label(page, 'Ajustes', size=24, bold=True).pack(anchor='w', pady=(5, 5))
+    label(page, 'Los parámetros de la izquierda se aplican en el próximo arranque.', color=MUTED).pack(anchor='w', pady=(0, 24))
     panel = Panel(page, height=390, padding=24)
     panel.pack(fill='x')
-    for title, variable, kind in (('Файл аккаунтов', app.cookies, 'cookies'), ('Конфигурация / Featured', app.config, 'config')):
+    for title, variable, kind in (('Archivo de cuentas', app.cookies, 'cookies'), ('Configuración / Featured', app.config, 'config')):
         label(panel.body, title, color=MUTED, size=10).pack(anchor='w', pady=(0, 8))
         line = tk.Frame(panel.body, bg=PANEL)
         line.pack(fill='x', pady=(0, 22))
         entry = ttk.Entry(line, textvariable=variable, style='Onyx.TEntry')
         entry.pack(side='left', fill='x', expand=True, ipady=7)
-        button = Button(line, text='Обзор', symbol='folder', width=110, height=42,
+        button = Button(line, text='Explorar', symbol='folder', width=110, height=42,
                         command=lambda v=variable, k=kind: choose_file(app, v, k))
         button.pack(side='right', padx=(12, 0))
         app.inputs.extend([entry, button])
-    label(panel.body, 'Workers — одновременные сессии. «Авто» выбирает группы Python и число загрузок.',
+    label(panel.body, 'Workers — sesiones simultáneas. «Auto» elige los grupos de Python y el número de cargas.',
           color=MUTED, size=10, wraplength=650, justify='left').pack(anchor='w', pady=(0, 8))
-    label(panel.body, 'Brainrot: полный скан каждые 30 секунд и проверка базы при входе нового игрока.\n'
-          'Steal An Egg: постоянный JobID, фильтр яиц и перескан после сброса и окончания ночи.\n'
-          'Оба режима меняют сервер после 5 подряд неудачных переподключений.\n'
-          'Список Featured редактируется в config.txt; сохранение настроек оставляет его целиком.',
+    label(panel.body, 'Brainrot: scan completo cada 30 segundos y chequeo de la base al entrar un jugador nuevo.\n'
+          'Steal An Egg: JobID persistente, filtro de eggs y rescan tras el reset y el fin de la noche.\n'
+          'Ambos modos cambian de servidor tras 5 reconnects fallidos seguidos.\n'
+          'La lista Featured se edita en config.txt; guardar los ajustes la conserva íntegra.',
           color=MUTED, size=10, wraplength=650, justify='left').pack(anchor='w', pady=(0, 20))
     buttons = tk.Frame(panel.body, bg=PANEL)
     buttons.pack(fill='x')
-    app.load_button = Button(buttons, text='Загрузить', command=app.load_settings, width=135)
+    app.load_button = Button(buttons, text='Cargar', command=app.load_settings, width=135)
     app.load_button.pack(side='left', padx=(0, 12))
-    app.save_button = Button(buttons, text='Сохранить настройки', command=app.save_settings, primary=True, width=220)
+    app.save_button = Button(buttons, text='Guardar ajustes', command=app.save_settings, primary=True, width=220)
     app.save_button.pack(side='left')
     app.inputs.extend([app.load_button, app.save_button])

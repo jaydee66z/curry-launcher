@@ -37,12 +37,12 @@ def main():
                 multiprocessing.set_executable(str(windowless))
         raw = sys.stdin.readline(32769)
         if len(raw) > 32768:
-            raise ValueError('Слишком длинные параметры запуска.')
+            raise ValueError('Parámetros de arranque demasiado largos.')
         parameters=json.loads(raw)
         profile=parameters.pop('profile','brainrot')
         target=parameters.pop('target',None)
         if profile not in ('brainrot','eggs','joiner'):
-            raise ValueError('Неизвестная вкладка сканера.')
+            raise ValueError('Tab del scanner desconocido.')
         if profile=='joiner':
             target=target_settings(**(target or {}))
         request = scanner_request(**parameters)
@@ -51,7 +51,7 @@ def main():
         try:
             credentials = read_mass_credentials(request['cookies_path'], request['accounts'])
         except BootstrapError as error:
-            raise BootstrapError(f"{error} Файл аккаунтов: {request['cookies_path']}. Проверь выбор файла cookies.") from None
+            raise BootstrapError(f"{error} Archivo de cuentas: {request['cookies_path']}. Verifica la selección del archivo cookies.") from None
 
         def read_commands():
             try:
@@ -68,10 +68,10 @@ def main():
                             command=validate_command(payload.get('line'))
                             account=payload.get('account')
                             if account is not None and (type(account) is not int or not 1<=account<=len(credentials)):
-                                raise ValueError('Недопустимый номер аккаунта.')
+                                raise ValueError('Número de cuenta inválido.')
                             commands.put(dict(line=command,account=account))
                         except (ValueError,AttributeError) as error:
-                            send('log',lines=['Joiner: '+str(error) if not isinstance(error,json.JSONDecodeError) else 'Joiner: неверный формат команды.'])
+                            send('log',lines=['Joiner: '+str(error) if not isinstance(error,json.JSONDecodeError) else 'Joiner: formato de comando inválido.'])
             except (OSError, ValueError):
                 commands.put('quit')
 
@@ -150,11 +150,11 @@ def main():
         return 0
     except (ValueError, OSError) as error:
         # BootstrapError messages are sanitized; never serialize arbitrary HTTP objects.
-        safe = str(error) if isinstance(error, (BootstrapError, ValueError)) and not isinstance(error, json.JSONDecodeError) else 'Не удалось запустить сканер.'
+        safe = str(error) if isinstance(error, (BootstrapError, ValueError)) and not isinstance(error, json.JSONDecodeError) else 'No se pudo iniciar el scanner.'
         send('error', message=safe)
         return 1
     except Exception:
-        send('error', message='Служебный процесс сканера завершился с ошибкой.')
+        send('error', message='El proceso de servicio del scanner terminó con error.')
         return 1
 
 

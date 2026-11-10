@@ -70,7 +70,7 @@ class _RemoteCoordinator:
                             self.pool.commands[slot].put_nowait(message[2])
                         except queue.Full:
                             self.pool.events.put((message[1]+1,dict(event='joiner_command',
-                                result=dict(command='error',message='Очередь команд аккаунта заполнена.'))))
+                                result=dict(command='error',message='La cola de comandos de la cuenta está llena.'))))
                 elif kind == 'stop':
                     break
         except (OSError, EOFError, queue.Full):

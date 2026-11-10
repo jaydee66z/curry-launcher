@@ -34,11 +34,11 @@ class ChatUnavailable(CommandError):
 
 def new_message_id(user_id, *, nonce=None):
     if type(user_id) is not int or not 0 < user_id < 2**63:
-        raise CommandError('Нет корректного UserId для отправки chat.')
+        raise CommandError('No hay un UserId válido para enviar chat.')
     if nonce is None:
         nonce = uuid.uuid4()
     if not isinstance(nonce, uuid.UUID) or not nonce.int:
-        raise CommandError('Не удалось создать идентификатор сообщения chat.')
+        raise CommandError('No se pudo crear el identificador del mensaje de chat.')
     # Native inbound 0x103e40444 drops the UserId prefix plus one separator;
     # 0x10302b7f8 requires the remaining GUID to be 38 bytes including braces.
     # Native SendUniverseChatMessageAsync 0x103e4a59d..0x103e4a71e.
@@ -49,16 +49,16 @@ def validate_message_id(message_id, user_id):
     if (type(user_id) is not int or not 0 < user_id < 2**63 or not isinstance(message_id, str) or
             not re.fullmatch(re.escape(str(user_id)) + r'[-_]\{[0-9A-Fa-f]{8}(?:-[0-9A-Fa-f]{4}){3}-[0-9A-Fa-f]{12}\}',
                              message_id)):
-        raise CommandError('MessageId чата должен содержать UserId этого аккаунта и GUID в фигурных скобках.')
+        raise CommandError('El MessageId del chat debe contener el UserId de esta cuenta y un GUID entre llaves.')
 
 
 def validate_text(text):
     if not isinstance(text, str) or not text.strip():
-        raise CommandError('Использование: chat текст сообщения')
+        raise CommandError('Uso: chat texto del mensaje')
     if len(text) > 200:
-        raise CommandError('Одно сообщение chat: максимум 200 символов.')
+        raise CommandError('Un mensaje de chat: máximo 200 caracteres.')
     if any(unicodedata.category(c) in ('Cc', 'Cs') for c in text):
-        raise CommandError('Сообщение не должно содержать управляющие символы или переносы строк.')
+        raise CommandError('El mensaje no debe contener caracteres de control ni saltos de línea.')
     return text
 
 
@@ -81,10 +81,10 @@ def prepare(world, user_id, text, message_id, *, universe_service=None):
     validate_text(text)
     validate_message_id(message_id, user_id)
     if world is None:
-        raise ChatUnavailable('Чат ещё загружается.')
+        raise ChatUnavailable('El chat aún se está cargando.')
     services = list(world.nodes.class_items('TextChatService'))
     if len(services) != 1:
-        raise ChatUnavailable('В полученном мире пока нет однозначного TextChatService.')
+        raise ChatUnavailable('En el mundo recibido todavía no hay un TextChatService único.')
     service, _ = services[0]
     channels = []
     for key, node in world.nodes.class_items('TextChannel'):
@@ -98,7 +98,7 @@ def prepare(world, user_id, text, message_id, *, universe_service=None):
             seen.add(parent)
             parent = world.nodes[parent]['parent']
     if len(channels) != 1:
-        raise ChatUnavailable('Общий канал RBXGeneral ещё не получен или недоступен в этой игре.')
+        raise ChatUnavailable('El canal general RBXGeneral aún no se ha recibido o no está disponible en este juego.')
     channel = channels[0]
     sources = [(key, node) for key, node in world.nodes.children(channel)
                if node['class'] == 'TextSource' and node['props'].get('UserIdReplicated') == user_id]
@@ -107,7 +107,7 @@ def prepare(world, user_id, text, message_id, *, universe_service=None):
         if all(key in order for key, _ in sources):
             sources = [max(sources, key=lambda pair: order[pair[0]])]
     if sources and all(node['props'].get('CanSend', True) is False for _, node in sources):
-        raise CommandError('Roblox запретил отправку в этот канал: TextSource.CanSend=false.')
+        raise CommandError('Roblox prohibió el envío en este canal: TextSource.CanSend=false.')
     schema = world.schema
     service_events = next((c.get('events', schema.events) for c in schema.classes
                            if c['name'] == 'TextChatService'), [])
@@ -127,12 +127,12 @@ def prepare(world, user_id, text, message_id, *, universe_service=None):
             packet = b'\x83\x07' + wire_guid(service) + struct.pack('<H', events[0]['id']) + values + b'\0'
             return {'packet': packet, 'service': service, 'source': None, 'channel_ref': channel,
                     'channel': 'Global', 'wire_event': name, 'loaded_packet': None}
-        raise CommandError('Сервер выделил UniverseChat, но схема отправки не поддерживается.')
+        raise CommandError('El servidor asignó UniverseChat, pero el schema de envío no está soportado.')
     if len(sources) != 1:
-        raise ChatUnavailable('Аккаунт ещё не добавлен в общий чат или чат для него недоступен.')
+        raise ChatUnavailable('La cuenta aún no se ha añadido al chat general o el chat no está disponible para ella.')
     source, node = sources[0]
     if node['props'].get('CanSend', True) is not True:
-        raise CommandError('Roblox запретил отправку в этот канал: TextSource.CanSend=false.')
+        raise CommandError('Roblox prohibió el envío en este canal: TextSource.CanSend=false.')
     # The received class descriptor already indexes its events. Avoid scanning
     # the entire game schema on every broadcast account.
     for name, types in SEND_EVENTS:
@@ -158,7 +158,7 @@ def prepare(world, user_id, text, message_id, *, universe_service=None):
                          if len(loaded) == 1 else None)
         return {'packet': packet, 'service': service, 'source': source, 'channel_ref': channel,
                 'channel': 'Here', 'wire_event': name, 'loaded_packet': loaded_packet}
-    raise CommandError('Схема сервера не содержит поддерживаемой отправки TextChatService.')
+    raise CommandError('El schema del servidor no contiene un envío soportado de TextChatService.')
 
 
 def receipt(name, arguments):

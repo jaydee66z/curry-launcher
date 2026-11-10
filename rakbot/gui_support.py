@@ -99,23 +99,23 @@ class FeaturedHistory:
 def scanner_request(*, config_path, cookies_path, accounts, workers, processes, inflight):
     config_path, cookies_path = Path(config_path).resolve(), Path(cookies_path).resolve()
     if not config_path.is_file():
-        raise ValueError('Выбери существующий config.txt.')
+        raise ValueError('Elige un config.txt existente.')
     if not cookies_path.is_file():
-        raise ValueError('Выбери существующий cookies.txt.')
+        raise ValueError('Elige un cookies.txt existente.')
     def integer(value, label, *, automatic=False, maximum=None):
-        if automatic and (value is None or str(value).strip().casefold() in ('', 'auto', 'авто')):
+        if automatic and (value is None or str(value).strip().casefold() in ('', 'auto')):
             return None
         try:
             result = int(str(value).strip())
         except ValueError:
-            raise ValueError(f'{label}: укажи целое положительное число.') from None
+            raise ValueError(f'{label}: especifica un número entero positivo.') from None
         if result < 1 or maximum is not None and result > maximum:
-            raise ValueError(f'{label}: недопустимое количество.')
+            raise ValueError(f'{label}: cantidad inválida.')
         return result
     return dict(config_path=str(config_path), cookies_path=str(cookies_path),
-        accounts=integer(accounts, 'Аккаунты', maximum=MAX_ACCOUNTS),
-        workers=integer(workers, 'Workers'), processes=integer(processes, 'Группы', automatic=True),
-        inflight=integer(inflight, 'Загрузки', automatic=True))
+        accounts=integer(accounts, 'Cuentas', maximum=MAX_ACCOUNTS),
+        workers=integer(workers, 'Workers'), processes=integer(processes, 'Grupos', automatic=True),
+        inflight=integer(inflight, 'Cargas', automatic=True))
 
 
 def save_json(path, value):

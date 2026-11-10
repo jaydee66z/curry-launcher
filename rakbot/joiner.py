@@ -21,38 +21,38 @@ def target_settings(place_id='',server_id='',vip_link=''):
             place=match[1]
         else:
             if vip:
-                raise ValueError('Укажи одну VIP-ссылку.')
+                raise ValueError('Especifica un único VIP link.')
             vip,place=place,''
     if vip:
         parse_vip_link(vip)
         if server:
-            raise ValueError('Выбери JobID или VIP-ссылку.')
+            raise ValueError('Elige JobID o VIP link.')
     try:
         number=int(place) if place else None
     except ValueError:
-        raise ValueError('Place ID должен быть положительным числом или ссылкой на игру.') from None
+        raise ValueError('Place ID debe ser un número positivo o un enlace al juego.') from None
     if number is not None and not 0<number<2**63:
-        raise ValueError('Недопустимый Place ID.')
+        raise ValueError('Place ID inválido.')
     if not vip and number is None:
-        raise ValueError('Для входа по JobID укажи также Place ID; либо вставь VIP-ссылку.')
+        raise ValueError('Para entrar por JobID especifica también Place ID; o pega un VIP link.')
     return dict(place_id=number,server_id=job_id(server) if server else None,vip_link=vip or None)
 
 
 def validate_command(line):
     if not isinstance(line,str) or not 1<=len(line)<=1024 or '\n' in line or '\r' in line:
-        raise ValueError('Недопустимая команда Joiner.')
+        raise ValueError('Comando de Joiner inválido.')
     head=line.lstrip().split(None,1)
     if head and head[0].casefold()=='chat' and len(head)==2:
         return line
     parts=shlex.split(line)
     if not parts:
-        raise ValueError('Введи команду.')
+        raise ValueError('Escribe un comando.')
     name=parts[0].casefold()
     if name in ('stoploop','status','players') and len(parts)==1:
         return name
     if name in ('teleport','looptp','where') and len(parts)==2 and re.fullmatch(r'[A-Za-z0-9_]{1,20}',parts[1]):
         return name+' '+parts[1]
-    raise ValueError('Команды: teleport ник, looptp ник, stoploop, where ник, chat текст, status.')
+    raise ValueError('Comandos: teleport nick, looptp nick, stoploop, where nick, chat texto, status.')
 
 
 def visible_players(rows,bot_ids):

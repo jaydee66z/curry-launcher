@@ -34,15 +34,15 @@ def load_settings(path):
     except FileNotFoundError:
         data = {}
     except (OSError, UnicodeError, ValueError):
-        raise ValueError('relay.json: ожидается UTF-8 JSON с enabled, host, port, key.') from None
+        raise ValueError('relay.json: se espera UTF-8 JSON con enabled, host, port, key.') from None
     if not isinstance(data, dict) or set(data) - set(DEFAULTS):
-        raise ValueError('relay.json: допустимы только поля enabled, host, port, key.')
+        raise ValueError('relay.json: solo se permiten los campos enabled, host, port, key.')
 
     settings = {**DEFAULTS, **data}
     if (type(settings['enabled']) is not bool or not isinstance(settings['host'], str)
             or type(settings['port']) is not int or not 1 <= settings['port'] <= 65535
             or not isinstance(settings['key'], str)):
-        raise ValueError('relay.json: неверный тип enabled/host/port/key.')
+        raise ValueError('relay.json: tipo inválido de enabled/host/port/key.')
     if len(settings['key']) < 16:
         settings['key'] = secrets.token_urlsafe(24)
         path.write_text(json.dumps(settings, indent=2, ensure_ascii=False) + '\n', 'utf-8')
@@ -86,14 +86,14 @@ class Relay:
         try:
             asyncio.run(self._main())
         except OSError as error:  # port busy, bad host
-            self.error = f'Relay не запустился на {self.host}:{self.port}: {error}'
+            self.error = f'Relay no arrancó en {self.host}:{self.port}: {error}'
             self.ready.set()
 
     async def _main(self):
         self.loop = asyncio.get_running_loop()
         self._stop = asyncio.Event()
         async with serve(self._handler, self.host, self.port, ping_interval=20, max_size=4096):
-            self.emit(f'Relay слушает ws://{self.host}:{self.port}')
+            self.emit(f'Relay escuchando en ws://{self.host}:{self.port}')
             self.ready.set()
             await self._stop.wait()
 
@@ -107,14 +107,14 @@ class Relay:
             return
         address = connection.remote_address[0] if connection.remote_address else '?'
         self.clients.add(connection)
-        self.emit(f'Relay: клиент подключён ({address}), всего {len(self.clients)}')
+        self.emit(f'Relay: cliente conectado ({address}), total {len(self.clients)}')
         try:
             await connection.send(json.dumps({'type': 'hello', 'placeId': PLACE_ID}))
             async for _ in connection:
                 pass  # clients only listen; anything they send is ignored
         finally:
             self.clients.discard(connection)
-            self.emit(f'Relay: клиент отключён ({address}), всего {len(self.clients)}')
+            self.emit(f'Relay: cliente desconectado ({address}), total {len(self.clients)}')
 
     @staticmethod
     async def _auth_message(connection):

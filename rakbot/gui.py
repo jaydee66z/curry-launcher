@@ -57,28 +57,28 @@ class App:
         self.page_number = 0
         self.table_dirty = True
         self.inputs = []
-        self.status = tk.StringVar(value='Остановлен')
+        self.status = tk.StringVar(value='Detenido')
         self.accounts = tk.StringVar(value='30')
         self.workers = tk.StringVar(value='30')
-        self.groups = tk.StringVar(value='Авто')
-        self.inflight = tk.StringVar(value='Авто')
+        self.groups = tk.StringVar(value='Auto')
+        self.inflight = tk.StringVar(value='Auto')
         self.cookies = tk.StringVar(value=str(cookies_path or self.base / 'cookies.txt'))
         self.config = tk.StringVar(value=str(config_path or self.base / 'config.txt'))
         self.servers = tk.StringVar(value='0')
         self.elapsed = tk.StringVar(value='00:00')
         self.featured = tk.StringVar(value='0')
         self.best = tk.StringVar(value='—')
-        self.account_status = tk.StringVar(value='Аккаунты ещё не запущены')
+        self.account_status = tk.StringVar(value='Las cuentas aún no se han iniciado')
         self.page_label = tk.StringVar()
         self.sort_choice = tk.StringVar(value='Recently added')
         self.join_place=tk.StringVar()
         self.join_server=tk.StringVar()
         self.join_vip=tk.StringVar()
-        self.join_scope=tk.StringVar(value='Все аккаунты')
+        self.join_scope=tk.StringVar(value='Todas las cuentas')
         self.join_line=tk.StringVar()
         self.result_label = tk.StringVar(value='Featured')
         self.table_heading = tk.StringVar(value='Featured')
-        self.table_subheading = tk.StringVar(value='Полный скан раз в 30 с · база при входе игрока')
+        self.table_subheading = tk.StringVar(value='Scan completo cada 30 s · base al entrar un jugador')
         self.cycle_label = tk.StringVar(value='')
         self._build()
         self.root.bind('<Destroy>',lambda event:self.egg_history.close() if event.widget==self.root else None,add='+')
@@ -118,12 +118,12 @@ class App:
             config = load_config(self.config.get())
             settings = config['scanner']
             self.workers.set(str(settings.get('workers') or 4))
-            self.groups.set(str(settings.get('processes') or 'Авто'))
-            self.inflight.set(str(settings.get('inflight') or 'Авто'))
-            self._append_log([f"Конфиг загружен. Названий Featured: {len(config['featured_pets'])}."])
+            self.groups.set(str(settings.get('processes') or 'Auto'))
+            self.inflight.set(str(settings.get('inflight') or 'Auto'))
+            self._append_log([f"Config cargado. Nombres de Featured: {len(config['featured_pets'])}."])
         except ValueError as error:
             if not quiet:
-                messagebox.showerror('Конфигурация', str(error), parent=self.root)
+                messagebox.showerror('Configuración', str(error), parent=self.root)
 
     def _request(self):
         request = scanner_request(config_path=self.config.get(), cookies_path=self.cookies.get(),
@@ -143,14 +143,14 @@ class App:
         if self.process is not None or profile==self.active_profile:
             return
         if profile not in ('brainrot','eggs','joiner'):
-            raise ValueError('Неизвестная вкладка.')
+            raise ValueError('Tab desconocido.')
         forms=(self.accounts,self.workers,self.groups,self.inflight)
         stats=(self.servers,self.elapsed,self.featured,self.best,self.account_status)
         self.profile_forms[self.active_profile]=tuple(v.get() for v in forms)
         self.profile_stats[self.active_profile]=tuple(v.get() for v in stats)
-        for variable,value in zip(forms,self.profile_forms.get(profile,('1','1','Авто','Авто'))):
+        for variable,value in zip(forms,self.profile_forms.get(profile,('1','1','Auto','Auto'))):
             variable.set(value)
-        for variable,value in zip(stats,self.profile_stats.get(profile,('0','00:00','0','—','Аккаунты ещё не запущены'))):
+        for variable,value in zip(stats,self.profile_stats.get(profile,('0','00:00','0','—','Las cuentas aún no se han iniciado'))):
             variable.set(value)
         self.active_profile=profile
         self.health={}
@@ -158,9 +158,9 @@ class App:
         self.page_number=0
         egg=profile=='eggs'
         joiner=profile=='joiner'
-        self.result_label.set('Игроков' if joiner else 'Яиц' if egg else 'Featured')
-        self.table_heading.set('Игроки сервера' if joiner else 'Steal An Egg' if egg else 'Featured')
-        self.table_subheading.set('Один клиент-наблюдатель · свои боты скрыты · нажми на игрока' if joiner else 'Яйца на дорожке · постоянные сессии · перескан по циклу игры' if egg else 'Полный скан раз в 30 с · база при входе игрока')
+        self.result_label.set('Jugadores' if joiner else 'Eggs' if egg else 'Featured')
+        self.table_heading.set('Jugadores del servidor' if joiner else 'Steal An Egg' if egg else 'Featured')
+        self.table_subheading.set('Un cliente observer · tus propios bots ocultos · haz click en un jugador' if joiner else 'Eggs en la pista · sesiones persistentes · rescan por ciclo del juego' if egg else 'Scan completo cada 30 s · base al entrar un jugador')
         self.profile_brainrot.configure(selected=profile=='brainrot')
         self.profile_eggs.configure(selected=egg)
         self.profile_joiner.configure(selected=joiner)
@@ -180,22 +180,22 @@ class App:
             self.result_controls.pack(side='right',anchor='n')
             self.joiner_command_bar.pack_forget()
             self.pagination.pack(side='right')
-        columns=(('username','Username',240),('display_name','Display name',260),('user_id','UserId',160)) if joiner else (('time','Время',115),('pet','Яйцо',190),('generation','Доход',120),
-            ('weight','Вес, кг',110),('mutations','Мутации',150),('rarity','Редкость',110),
-            ('area','Зона',125),('job','JobID',180),('copy','',34)) if egg else (
-            ('time','Время',120),('pet','Пет / мутация',290),('generation','Доход',150),('job','JobID',250),('copy','',34))
+        columns=(('username','Username',240),('display_name','Display name',260),('user_id','UserId',160)) if joiner else (('time','Tiempo',115),('pet','Egg',190),('generation','Income',120),
+            ('weight','Peso, kg',110),('mutations','Mutaciones',150),('rarity','Rarity',110),
+            ('area','Zona',125),('job','JobID',180),('copy','',34)) if egg else (
+            ('time','Tiempo',120),('pet','Pet / mutación',290),('generation','Income',150),('job','JobID',250),('copy','',34))
         self.tree.configure(columns=tuple(c[0] for c in columns))
         for name,title,width in columns:
             self.tree.heading(name,text=title,anchor='w')
             self.tree.column(name,width=width,minwidth=34 if name=='copy' else min(width,90),
                              stretch=name in ('pet','job','username','display_name'),anchor='w')
-        self.empty_history.configure(text='Ожидание списка игроков…' if joiner else 'Здесь появятся яйца Steal An Egg' if egg else 'Здесь появятся найденные Featured')
+        self.empty_history.configure(text='Esperando la lista de jugadores…' if joiner else 'Aquí aparecerán los eggs de Steal An Egg' if egg else 'Aquí aparecerán los Featured encontrados')
         if not egg:
             self.cycle_label.set('')
         else:
             self._cycle_second=None
             if self.egg_cycle_end is None:
-                self.cycle_label.set('Цикл: —')
+                self.cycle_label.set('Ciclo: —')
         self._refresh_history()
 
     def save_settings(self):
@@ -205,9 +205,9 @@ class App:
             config['scanner'].update(workers=request['workers'], processes=request['processes'], inflight=request['inflight'])
             save_json(Path(request['config_path']), config)
             self._save_preferences(request)
-            self._append_log(['Настройки сохранены. Список Featured сохранён целиком.'])
+            self._append_log(['Ajustes guardados. La lista Featured se conservó íntegra.'])
         except (ValueError, OSError) as error:
-            messagebox.showerror('Настройки', str(error), parent=self.root)
+            messagebox.showerror('Ajustes', str(error), parent=self.root)
 
     def _save_preferences(self, request):
         values={k:request[k] for k in ('config_path','cookies_path','accounts')}
@@ -244,7 +244,7 @@ class App:
             self.process.stdin.write(json.dumps(request, ensure_ascii=True) + '\n')
             self.process.stdin.flush()
             self.stop_at = None
-            self.status.set('Запускается…')
+            self.status.set('Iniciando…')
             self.servers.set('0')
             self.featured.set('0')
             self.elapsed.set('00:00')
@@ -252,10 +252,10 @@ class App:
             if self.active_profile=='eggs':
                 self.egg_cycle_end=None
                 self._cycle_second=None
-                self.cycle_label.set('Цикл: —')
+                self.cycle_label.set('Ciclo: —')
             self._set_running(True)
             mode='Joiner' if self.active_profile=='joiner' else 'Steal An Egg' if self.active_profile=='eggs' else 'Brainrot'
-            self._append_log([f"{mode}: старт, {request['accounts']} аккаунтов, workers {request['workers']}."])
+            self._append_log([f"{mode}: inicio, {request['accounts']} cuentas, workers {request['workers']}."])
             threading.Thread(target=self._read, args=(self.process,), daemon=True, name='rakbot-ui-reader').start()
         except (ValueError, OSError) as error:
             self.reader_done.set()
@@ -263,7 +263,7 @@ class App:
                 self.process.terminate()
             else:
                 self._finish()
-            messagebox.showerror('Запуск', str(error), parent=self.root)
+            messagebox.showerror('Arranque', str(error), parent=self.root)
 
     def _set_running(self, running):
         for widget in self.inputs:
@@ -279,7 +279,7 @@ class App:
                     if not isinstance(event, dict):
                         raise ValueError
                 except ValueError:
-                    event = {'type': 'log', 'lines': ['Некорректный ответ служебного процесса.']}
+                    event = {'type': 'log', 'lines': ['Respuesta incorrecta del proceso de servicio.']}
                 self.events.put(event)
         except (OSError, ValueError):
             pass
@@ -292,8 +292,8 @@ class App:
             self._append_log(event.get('lines', []))
         elif kind == 'started':
             if self.stop_at is None:
-                self.status.set('Работает')
-            self.account_status.set(f"Выбрано: {event['accounts']} · workers: {event['workers']} · групп: {event['groups']}")
+                self.status.set('Funcionando')
+            self.account_status.set(f"Seleccionadas: {event['accounts']} · workers: {event['workers']} · grupos: {event['groups']}")
         elif kind == 'stats':
             self.servers.set(str(event['servers']))
             self.featured.set(str(event['featured']))
@@ -305,13 +305,13 @@ class App:
                 if target:
                     self.join_job=target['job_id']
                 if 'active_accounts' in event:
-                    self.join_scope_box.configure(values=('Все аккаунты',)+tuple(f"#{i}" for i in event['active_accounts']))
+                    self.join_scope_box.configure(values=('Todas las cuentas',)+tuple(f"#{i}" for i in event['active_accounts']))
             self.health = {key:event[key] for key in ('total','states','failure_reasons','failure_stages') if key in event}
             total=f"/{event['total']}" if 'total' in event else ''
-            pending=f" · ждут: {event['pending']}" if 'pending' in event else ''
-            self.account_status.set(f"Активны: {event['active']}{total}{pending} · ошибки: {event['failed']}")
+            pending=f" · esperando: {event['pending']}" if 'pending' in event else ''
+            self.account_status.set(f"Activas: {event['active']}{total}{pending} · errores: {event['failed']}")
             if self.active_profile=='joiner' and 'spawned' in event:
-                self.account_status.set(self.account_status.get()+f" · персонажи: {event['spawned']}")
+                self.account_status.set(self.account_status.get()+f" · personajes: {event['spawned']}")
             self._refresh_health()
         elif kind == 'featured':
             if self.history.add(self.run_id, event.get('rows', [])):
@@ -325,8 +325,8 @@ class App:
                 self.table_dirty=True
             self.join_job=event.get('job_id') or self.join_job
             self.join_observer=event.get('observer')
-            observer=f"аккаунт #{self.join_observer}" if self.join_observer else 'ожидание клиента'
-            self.table_subheading.set(f'{observer} · свои боты скрыты · нажми на игрока')
+            observer=f"cuenta #{self.join_observer}" if self.join_observer else 'esperando cliente'
+            self.table_subheading.set(f'{observer} · tus propios bots ocultos · haz click en un jugador')
         elif kind == 'egg_scan':
             rows=event['rows']
             if event.get('replace'):
@@ -361,11 +361,11 @@ class App:
             self.egg_batches.pop((event['account'],event['previous_job']),None)
             self.table_dirty=True
         elif kind == 'error':
-            self._append_log(['Ошибка: ' + event.get('message', 'Сканер завершился с ошибкой.')])
-            self.status.set('Ошибка')
+            self._append_log(['Error: ' + event.get('message', 'El scanner terminó con error.')])
+            self.status.set('Error')
         elif kind == 'finished':
-            label='игроков' if self.active_profile=='joiner' else 'яиц' if self.active_profile=='eggs' else 'Featured'
-            self._append_log([f"Сканер остановлен. Серверов: {event['servers']}, {label}: {event['featured']}."])
+            label='jugadores' if self.active_profile=='joiner' else 'eggs' if self.active_profile=='eggs' else 'Featured'
+            self._append_log([f"Scanner detenido. Servidores: {event['servers']}, {label}: {event['featured']}."])
 
     def _poll(self):
         if self.active_profile=='eggs' and self.egg_cycle_end is not None:
@@ -373,8 +373,8 @@ class App:
             if remaining!=self._cycle_second:
                 self._cycle_second=remaining
                 minutes,seconds=divmod(remaining,60)
-                phase='Ночь' if remaining<=self.egg_cycle_night else 'Сброс'
-                self.cycle_label.set(f'{phase}: {minutes:02}:{seconds:02}' if self.egg_cycle_running else 'Цикл приостановлен')
+                phase='Noche' if remaining<=self.egg_cycle_night else 'Reset'
+                self.cycle_label.set(f'{phase}: {minutes:02}:{seconds:02}' if self.egg_cycle_running else 'Ciclo pausado')
         for _ in range(100):
             try:
                 event = self.events.get_nowait()
@@ -383,14 +383,14 @@ class App:
             try:
                 self._handle(event)
             except (KeyError, TypeError, ValueError, OSError, sqlite3.Error):
-                self._append_log(['Ошибка обработки результата. Сканер останавливается.'])
+                self._append_log(['Error procesando el resultado. El scanner se detiene.'])
                 self.stop()
         if self.table_dirty:
             try:
                 self._refresh_history()
             except sqlite3.Error:
                 self.table_dirty = False
-                self._append_log(['Не удалось открыть историю Featured. Сканер останавливается.'])
+                self._append_log(['No se pudo abrir el historial Featured. El scanner se detiene.'])
                 self.stop()
         if self.process is not None:
             if self.stop_at is not None and time.monotonic() >= self.stop_at and self.process.poll() is None:
@@ -409,9 +409,9 @@ class App:
 
     def _finish(self):
         if self.process is not None:
-            if self.process.returncode not in (None, 0) and self.status.get() != 'Ошибка':
-                self._append_log([f'Процесс сканера завершился с кодом {self.process.returncode}.'])
-                self.status.set('Ошибка')
+            if self.process.returncode not in (None, 0) and self.status.get() != 'Error':
+                self._append_log([f'El proceso del scanner terminó con código {self.process.returncode}.'])
+                self.status.set('Error')
             for stream in (self.process.stdin, self.process.stdout):
                 if stream is not None:
                     stream.close()
@@ -420,14 +420,14 @@ class App:
             self.log_file.close()
             self.log_file = None
         self.stop_at = None
-        if self.status.get() != 'Ошибка':
-            self.status.set('Остановлен')
+        if self.status.get() != 'Error':
+            self.status.set('Detenido')
         self._set_running(False)
 
     def stop(self):
         if self.process is None or self.stop_at is not None:
             return
-        self.status.set('Останавливается…')
+        self.status.set('Deteniéndose…')
         self.stop_button.configure(state='disabled')
         self.stop_at = time.monotonic() + self.stop_timeout
         try:
@@ -456,7 +456,7 @@ class App:
                 except OSError:
                     pass
                 self.log_file = None
-                value = 'Не удалось сохранить файл лога. Вывод продолжается в окне.\n' + value
+                value = 'No se pudo guardar el archivo de log. La salida continúa en la ventana.\n' + value
         at_bottom = self.log.yview()[1] >= 0.98
         self.log.configure(state='normal')
         self.log.insert('end', value)
@@ -481,7 +481,7 @@ class App:
         history.clear()
         self.page_number = 0
         self._refresh_history()
-        self._append_log(['Список результатов очищен. Новые результаты будут добавляться при следующих проверках.'])
+        self._append_log(['Lista de resultados vaciada. Los nuevos resultados se añadirán en las siguientes verificaciones.'])
 
     def open_logs(self):
         import os
@@ -490,7 +490,7 @@ class App:
         try:
             os.startfile(str(folder.resolve()))
         except OSError:
-            messagebox.showerror('Логи',f'Не удалось открыть папку: {folder.resolve()}',parent=self.root)
+            messagebox.showerror('Logs',f'No se pudo abrir la carpeta: {folder.resolve()}',parent=self.root)
 
     def show_health(self):
         from .gui_onyx import BG,PANEL,TEXT,Button,label
@@ -498,15 +498,15 @@ class App:
             self.health_window.lift()
             return
         window=self.health_window=tk.Toplevel(self.root)
-        window.title('Состояния аккаунтов')
+        window.title('Estados de las cuentas')
         window.configure(bg=BG)
         window.geometry('740x520')
         window.minsize(600,400)
-        label(window,'Состояния аккаунтов',size=18,bold=True).pack(anchor='w',padx=20,pady=16)
+        label(window,'Estados de las cuentas',size=18,bold=True).pack(anchor='w',padx=20,pady=16)
         self.health_body=tk.Text(window,bg=PANEL,fg=TEXT,relief='flat',wrap='word',
             font=('Segoe UI',11),padx=14,pady=12,state='disabled')
         self.health_body.pack(fill='both',expand=True,padx=20)
-        Button(window,text='Открыть папку логов',width=230,command=self.open_logs).pack(anchor='e',padx=20,pady=16)
+        Button(window,text='Abrir carpeta de logs',width=230,command=self.open_logs).pack(anchor='e',padx=20,pady=16)
         self._refresh_health()
 
     def _refresh_health(self):
@@ -514,7 +514,7 @@ class App:
         if self.health_body is not None and self.health_body.winfo_exists():
             self.health_body.configure(state='normal')
             self.health_body.delete('1.0','end')
-            self.health_body.insert('end',health_text(self.health) if 'states' in self.health else 'Подробные состояния появятся после запуска обновлённого сканера.')
+            self.health_body.insert('end',health_text(self.health) if 'states' in self.health else 'Los estados detallados aparecerán tras iniciar el scanner actualizado.')
             self.health_body.configure(state='disabled')
 
     def _refresh_history(self):
@@ -548,7 +548,7 @@ class App:
             self.empty_history.place_forget()
         else:
             self.empty_history.place(relx=.5, rely=.55, anchor='center')
-        self.page_label.set(f'Всего {total}')
+        self.page_label.set(f'Total {total}')
         self.previous.configure(state='normal' if self.page_number else 'disabled')
         self.next.configure(state='normal' if self.page_number + 1 < pages else 'disabled')
         first = max(0, min(self.page_number - 2, pages - len(self.page_buttons)))
@@ -587,7 +587,7 @@ class App:
             self.row_jobs[identity]=self.join_job
         if selected and self.tree.exists(selected[0]):
             self.tree.selection_set(selected[0])
-        self.page_label.set(f'Игроков: {len(self.join_players)} · свои аккаунты исключены')
+        self.page_label.set(f'Jugadores: {len(self.join_players)} · tus propias cuentas excluidas')
         if self.join_players:
             self.empty_history.place_forget()
         else:

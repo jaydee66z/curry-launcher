@@ -208,7 +208,7 @@ class MassRunner:
                     self.emit('mass: ' + str(error))
                     return True
                 if len(self._startup_chats) >= 32:
-                    self.emit('mass: Очередь chat для запускающихся аккаунтов заполнена.')
+                    self.emit('mass: La cola de chat para las cuentas en arranque está llena.')
                     return True
                 self._startup_chats.append(text)
             if parts and parts[0].casefold() == 'looptp' and len(parts) == 2:

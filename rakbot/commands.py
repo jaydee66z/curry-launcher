@@ -16,7 +16,7 @@ class PlayerUnavailable(CommandError):
 
 def resolve_player(client, nickname=None):
     if client.world is None:
-        raise PlayerUnavailable('Мир ещё загружается. Дождись списка игроков и появления персонажа.')
+        raise PlayerUnavailable('El mundo aún se está cargando. Espera la lista de jugadores y a que aparezca el personaje.')
     players = []
     for key, node in client.world.nodes.class_items('Player'):
         if node['class'] != 'Player' or type(node['props'].get('UserId')) is not int:
@@ -34,9 +34,9 @@ def resolve_player(client, nickname=None):
             matches = [p for p in players if p[2].casefold().startswith(query)]
     if len(matches) > 1:
         names = ', '.join(sorted(p[2] for p in matches)[:8])
-        raise CommandError('Ник подходит нескольким игрокам: ' + names + '. Уточни префикс или полный username.')
+        raise CommandError('El nickname coincide con varios jugadores: ' + names + '. Especifica el prefijo o el username completo.')
     if not matches:
-        raise PlayerUnavailable('Игрок пока не найден. Проверь полный username в players или дождись загрузки списка.')
+        raise PlayerUnavailable('Jugador no encontrado todavía. Verifica el username completo en players o espera a que cargue la lista.')
     key, node, username = matches[0]
     return key, node, username
 
@@ -45,12 +45,12 @@ def root_for(client, player):
     character = player['props'].get('Character')
     model = client.world.nodes.get(character)
     if character is None or not model or model['class'] != 'Model':
-        raise CommandError('Модель персонажа игрока пока не получена.')
+        raise CommandError('El modelo del personaje del jugador aún no se ha recibido.')
     roots = [(key, node) for key, node in client.world.nodes.children(character)
              if node['parent'] == character and node['class'] in ('Part', 'MeshPart') and
              node['props'].get('Name') == b'HumanoidRootPart']
     if len(roots) != 1:
-        raise CommandError('Корневая часть персонажа пока не получена. Позиция игрока недоступна.')
+        raise CommandError('La root part del personaje aún no se ha recibido. La posición del jugador no está disponible.')
     return roots[0]
 
 
@@ -62,7 +62,7 @@ def position_for(client, nickname=None):
     position = frame.get('position') if isinstance(frame, dict) else None
     if (not isinstance(position, (tuple, list)) or len(position) != 3 or
             any(type(v) not in (int, float) or not math.isfinite(v) or abs(v) > 2**30 for v in position)):
-        raise CommandError('Координаты персонажа пока не получены.')
+        raise CommandError('Las coordenadas del personaje aún no se han recibido.')
     observed = client.world.position_observed.get(root)
     return {'username': username, 'user_id': player['props']['UserId'], 'root': root,
             'position': tuple(position),
@@ -79,7 +79,7 @@ def execute(client, line):
     try:
         args = shlex.split(line)
     except ValueError:
-        raise CommandError('Незакрытая кавычка в команде.') from None
+        raise CommandError('Comilla sin cerrar en el comando.') from None
     if not args:
         return None
     command, *arguments = args
@@ -113,4 +113,4 @@ def execute(client, line):
         return {'command': command, **result}
     if command in ('stoploop', 'stoplooptp') and not arguments:
         return {'command': 'looptp', **client.stop_loop()}
-    raise CommandError(f'Неизвестная команда или аргументы: {command[:64]}. Введи help. Esc очищает строку ввода.')
+    raise CommandError(f'Comando o argumentos desconocidos: {command[:64]}. Escribe help. Esc limpia la línea de entrada.')
