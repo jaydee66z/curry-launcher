@@ -2,6 +2,14 @@
 
 All notable changes per session. Keep newest at top.
 
+## 2026-11-10 — mm2-0.1 (MM2 scripts baseline)
+
+- Added `scripts/mm2-candy-farm/collector.lua` — Heartbeat-driven candy farm with three gates, noclip, hover and danger evasion (author: Tormenta_2336)
+- Added `scripts/mm2-candy-farm/box_opener.lua` — auto-opener for `Halloween2026Box` via `OpenCrate:InvokeServer`
+- Added `scripts/mm2-candy-farm/README.md` — tunables and known trade-offs
+- Vault note: [[mm2-scripts]]
+- Operator installed an MCP Roblox executor so we can iterate against the live game; tool not yet visible in this Claude session — may need a Claude Code restart to register
+
 ## 2026-11-10 — v0.1.1
 
 - Traducidas todas las cadenas de usuario del ruso al español en los 12 archivos afectados: `chat.py`, `commands.py`, `game_client.py`, `gui.py`, `gui_onyx.py`, `gui_support.py`, `gui_worker.py`, `joiner.py`, `mass.py`, `relay.py`, `scan_processes.py`, `scanner_health.py`

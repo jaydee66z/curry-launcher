@@ -16,6 +16,7 @@ Project knowledge base. All notes in English. Linked with wikilinks.
 
 - [[rakbot-analysis/overview|Rakbot analysis]] — full teardown of the
   Rakbot Roblox scanner package adopted as Curry Launcher v0.1 baseline
+- [[mm2-scripts]] — MM2 candy farm + Halloween box opener Lua scripts (v0.1)
 
 ## Project
 
