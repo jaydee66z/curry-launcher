@@ -1,7 +1,44 @@
-target/
-*.class
+# === SECRETS — NEVER COMMIT ===
+cookies.txt
+relay.json
+*.cookies
+*.secret
+.env
+.env.*
+
+# === Runtime caches / state ===
+.rakbot-cache/
+.rakbot-ui/
+*.sqlite3
+*.sqlite3-journal
+*.sqlite3-wal
+*.sqlite3-shm
+
+# === Python ===
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+dist/
+build/
+*.spec
+
+# === Logs ===
+*.log
+logs/
+
+# === IDE / editor ===
 .idea/
 *.iml
 .vscode/
-*.log
 .DS_Store
+
+# === OS ===
+Thumbs.db
+
+# === Obsidian workspace state (keep config, drop user-local state) ===
+docs/obsidian/.obsidian/workspace.json
+docs/obsidian/.obsidian/workspace-mobile.json
