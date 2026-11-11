@@ -2,6 +2,11 @@
 
 All notable changes per session. Keep newest at top.
 
+## 2026-11-10 — mm2-0.8 (anti-stuck)
+
+- `collector.lua`: per-coin attempt counter (MAX_ATTEMPTS=2 → visited permanente), trip watchdog (STUCK_TIMEOUT=4s → bury), RETRY_AFTER 1.5→0.6
+- Fixes infinite re-selection loop on unreachable candies (ceiling, inside geometry, hitbox mismatch) observed in live play after v0.7
+
 ## 2026-11-10 — mm2-0.1 (MM2 scripts baseline)
 
 - Added `scripts/mm2-candy-farm/collector.lua` — Heartbeat-driven candy farm with three gates, noclip, hover and danger evasion (author: Tormenta_2336)

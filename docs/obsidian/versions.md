@@ -8,5 +8,6 @@ Semantic versioning: MAJOR.MINOR.PATCH.
 | 0.1     | 2026-11-10 | Rakbot source adopted as baseline; full analysis in [[rakbot-analysis/overview]] |
 | 0.1.1   | 2026-11-10 | All user-facing Russian strings translated to Spanish; technical terms kept in English |
 | mm2-0.1 | 2026-11-10 | MM2 candy farm + Halloween box opener Lua scripts adopted — see [[mm2-scripts]] |
+| mm2-0.8 | 2026-11-10 | collector.lua: anti-stuck (max attempts + trip watchdog) — stops re-selecting unreachable candies |
 
 See also: [[changelog]], [[index]].
