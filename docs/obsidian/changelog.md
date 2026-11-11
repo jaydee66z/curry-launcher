@@ -2,6 +2,13 @@
 
 All notable changes per session. Keep newest at top.
 
+## 2026-11-10 — mm2-0.9 (real noclip)
+
+- `collector.lua`: noclip movido de `Heartbeat` (post-física) a `RunService.Stepped` (pre-física) — ahora los `CanCollide=false` surten efecto en el mismo frame
+- Fix torsos/HRP chocando con geometría del mundo (bot sumido en el piso / atascado en vitrinas)
+- Iteración live sobre `char:GetDescendants()`, sin caché estático. Conexión global de Stepped sobrevive respawns
+- Verificado en vivo: HRP/UpperTorso/LowerTorso/Head todos `CanCollide=false` tras recarga
+
 ## 2026-11-10 — mm2-0.8 (anti-stuck)
 
 - `collector.lua`: per-coin attempt counter (MAX_ATTEMPTS=2 → visited permanente), trip watchdog (STUCK_TIMEOUT=4s → bury), RETRY_AFTER 1.5→0.6
