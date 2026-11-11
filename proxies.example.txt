@@ -1,0 +1,18 @@
+# Proxy list (one per line). Copy to proxies.txt or proxies.local.txt
+# — the real file is gitignored. Lines starting with # are ignored.
+#
+# Accepted formats:
+#   LOGIN:PASS@HOST:PORT
+#   http://LOGIN:PASS@HOST:PORT
+#   HOST:PORT                      (no auth)
+#   HOST:PORT:LOGIN:PASS
+#
+# Each line = 1 sticky slot = 1 pinned IP. account_id % len(lines)
+# picks which line an account uses, so the same account always exits
+# through the same IP across restarts.
+#
+# Example (DataImpulse port-per-slot list):
+#
+# <USER>__cr.<countries>:<PASS>@<HOST>:<PORT>
+# where <HOST> is the gateway (e.g. gw.<provider>.com) and <PORT>
+# cycles 10000, 10001, 10002, ... one port per sticky slot.

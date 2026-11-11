@@ -46,3 +46,12 @@ docs/obsidian/.obsidian/workspace-mobile.json
 # Local webhook URL (Discord notifications) — NEVER commit
 scripts/mm2-candy-farm/webhook.local.lua
 scripts/mm2-candy-farm/*.local.lua
+
+# Proxy credentials (DataImpulse etc.) — NEVER commit
+proxies.local.json
+proxies.local.*
+
+# Proxy list (DataImpulse etc.) — NEVER commit
+proxies.txt
+proxies.local.txt
+proxies.list
