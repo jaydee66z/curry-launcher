@@ -1,110 +1,38 @@
 --[[
-    MM2 CANDY FARM — v0.9 (Curry Launcher)
-    ======================================
-    v0.9 NOCLIP FIX: live probe found HumanoidRootPart, UpperTorso,
-    LowerTorso holding CanCollide=true despite the per-frame noclip
-    sweep. Root cause: the sweep ran on Heartbeat (AFTER the physics
-    step), so our CanCollide=false write took effect only for the
-    NEXT frame's physics — the current frame already collided using
-    the server-restored CanCollide=true. The bot wedged in glass
-    cases and corners.
-    - Noclip now runs on RunService.Stepped (BEFORE physics).
-    - Iterates char:GetDescendants() live each frame instead of a
-      stale cache (covers newly-added parts like tools).
-    - Explicit forEach of HRP+torsos first (most important).
-    - Heartbeat sweep kept as belt-and-braces.
+    MM2 CANDY FARM — v0.11 (Curry Launcher)
+    =======================================
+    v0.11 FULL REWRITE — physics-based movement, no CFrame teleports.
 
-    v0.8 ANTI-STUCK: v0.7 fixed the server kicks but the bot still
-    looped on unreachable candies (ceiling, inside geometry, hitbox
-    mismatch). It would park, time out, defer for RETRY_AFTER, and
-    re-select the SAME candy on the next tick since it was still the
-    closest. Fixes:
-    - Per-coin attempt counter. After MAX_ATTEMPTS (2) failed park
-      cycles, the coin is visited=true for the round (never picked
-      again). Prevents the ceiling-candy infinite loop shown in
-      live play.
-    - Trip watchdog: if tripTarget hasn't changed in STUCK_TIMEOUT (4s)
-      AND no pickup fired, mark the target visited and clear. Catches
-      cases where the bot physically can't make progress (walled off,
-      target inside a locked door, etc).
-    - RETRY_AFTER tightened 1.5 -> 0.6 so defers rotate faster.
-    - Attempts/visited counts exposed in _G.farmDebug for live probing.
-    - dlog on each discard so console shows why a coin was abandoned.
+    Lessons from v0.1-v0.10:
+    - CFrame teleports do NOT fire the server's Touched handler on
+      Coin_Server (verified live: teleporting HRP directly onto a
+      coin and waiting 3.5s produced zero pickups).
+    - AC "Invalid position" (code 267) kicks the account the moment
+      position-delta per server tick exceeds walkspeed validation.
+      Any CFrame write that exceeds mod * walkspeed * tick_interval
+      will eventually trip it.
+    - PlatformStand + BodyVelocity breaks the standard humanoid
+      replication path, which is how MM2's pickup fires.
 
-    v0.7 ANTI-KICK: user received "Server Kick Message: Invalid position"
-    v0.7 ANTI-KICK: user received "Server Kick Message: Invalid position"
-    while farming. Triggers identified and mitigated:
-    - SPEED=26 is the kick edge. Lower default to 18. The reference
-      bot's own warning: "Above 30 risks kicks; keep 26".
-    - dt can spike (game lag, context switch); clamp dt to 0.05 so
-      a single frame never computes more than SPEED*0.05 ~= 0.9 studs.
-    - Hard cap per-frame CFrame displacement to MAX_FRAME_STEP studs
-      regardless of SPEED*dt math.
-    - Guard every CFrame write: reject if the jump would exceed
-      MAX_JUMP studs (anti-teleport). The coin is deferred instead.
-    - Drop the on-pickup snap. The step loop already brings us within
-      reach, and the server's own .Touched zone picks up when the
-      head overlaps the coin; snapping just creates extra jumps the
-      anti-cheat can flag.
-    - Character respawn / Character died handler now wipes tripTarget,
-      parkedCoin, and forces a cache rebuild to avoid old-map targets.
+    Correct approach (this version):
+    - Humanoid:MoveTo(target) every frame toward the current coin.
+    - WalkSpeed cranked (default 40) — server validates vs this value.
+    - Noclip via per-frame CanCollide=false on every part on
+      RunService.Stepped (pre-physics) — the character walks THROUGH
+      walls normally; `.Touched` still fires on Coin_Server.
+    - NO PlatformStand, NO BodyVelocity, NO CFrame writes to HRP.
+    - Hover handled by setting Humanoid.HipHeight so the character
+      floats to the coin's Y naturally, respecting the humanoid's
+      own replication smoothing (AC-safe).
+    - Jump when coin is well above character (JUMP_HEIGHT_DELTA).
+    - CoinsStarted resets per-round state; per-coin attempt counter
+      keeps us from looping on unreachable candies.
 
-    v0.6 CRITICAL FIX:
-    - Live analysis showed every coin in MM2 shares the SAME CoinID
-      attribute (literal "Candy"). Our v0.2-v0.5 used CoinID as the
-      visited key, so the FIRST successful pickup set visited["Candy"]
-      = true and blocked EVERY subsequent coin. The bot picked one
-      candy and froze for 35+ seconds.
-    - v0.6 keys visited/deferredUntil on the coin INSTANCE itself
-      (weak-keyed table — orphaned coins drop on GC). We no longer
-      need the CoinID to know which coin was picked: MM2 sets the
-      per-coin attribute Collected=true on the server side, so
-      getBestCoin's existing Collected filter handles it.
-    - CoinCollected remote listener now only increments the per-round
-      candy counter (no dedup needed).
-
-    v0.5 CHANGES vs v0.4:
-    - PICKUP FIX #2: the v0.4 anti-sink clamp broke coins BELOW the
-      character (Y target stayed at myPos.Y, head never reached coin).
-      v0.5 always targets coin.Y - headOffset; STAND_ON_FLOOR is off
-      by default. Turn it back on only if the server kicks for sinking
-      into the floor.
-    - DEBUG EXPOSURE: internal state is mirrored to `_G.farmDebug` for
-      live introspection via get-data-by-code. Fields: myRole,
-      wasFarming, candiesThisRound, parkedCoinID, tripCoinID,
-      lastBestCoinID, lastBestDist, visitedCount, deferredCount,
-      lastDecisionAt.
-    - LOG: rate-limited prints on state transitions (round start,
-      wasFarming toggle, combat mode entered) for console-based
-      debugging.
-
-    v0.4 CHANGES vs v0.3:
-    - CRITICAL PICKUP FIX: STAND_ON_FLOOR semantics corrected.
-      v0.3 pinned target.Y = myPos.Y which, for any coin ABOVE the
-      character (most coins on platforms/tables/stairs), left the head
-      BELOW the coin — the .Touched never fired. v0.4 interprets the
-      flag as "anti-sink": never DESCEND below current Y, but always
-      RISE if needed to bring the head to coin.Y via headOffset.
-      Explicit formula: target.Y = max(coin.Y - headOffset, myPos.Y).
-    - PICKUP DETECTION FIX: we now measure HEAD → coin distance (3D),
-      not HRP target distance. The server fires CoinCollected the
-      moment the Head's hitbox overlaps the CoinVisual's hitbox.
-    - CANDY COUNTER: a per-round counter increments on each
-      CoinCollected event. Reset on CoinsStarted.
-    - ROLE-BASED COMBAT:
-        * COMBAT_AT_CANDIES (default 50) — threshold candies this round
-          before combat mode engages.
-        * Sheriff: when threshold met + murderer visible, fires
-          Gun.Shoot:FireServer(gunOrigin, targetCFrame) targeting the
-          murderer's HRP, respecting TIME_BETWEEN_SHOTS reload.
-        * Murderer: when threshold met, walks to the nearest alive
-          player and fires Knife.Events.KnifeStabbed:FireServer() when
-          within STAB_RANGE, respecting TIME_BETWEEN_STABS.
-    Kill switch: `running = false`.
+    Kill switch: `running = false` (also wipes _G.farmDebug).
 ]]
 
 running = false
-task.wait(0.5)
+task.wait(0.4)
 
 local Players            = game:GetService("Players")
 local RNS                = game:GetService("RunService")
@@ -119,72 +47,59 @@ running                  = true
 local CONFIG = {
     -- Features
     FARM_COINS              = true,
-    STAND_ON_FLOOR          = false, -- v0.5: off by default; breaks coins below char when on
     ABORT_IF_MURDERER_NEAR  = true,
-    CONTEST                 = true,
-    LEAVE_FOR_OTHER_BOTS    = false,
-    DEBUG_LOG               = true,  -- rate-limited prints
-    DEBUG_EXPOSE            = true,  -- mirror state to _G.farmDebug
+    DEBUG_LOG               = true,
+    DEBUG_EXPOSE            = true,
 
-    -- Combat (new in v0.4)
-    COMBAT_AT_CANDIES       = 50,    -- candies this round before combat kicks in
-    SHERIFF_SHOOT_RANGE     = 60,    -- stop farming to shoot when murderer within
-    TIME_BETWEEN_SHOTS      = 3.4,   -- gun reload
-    STAB_RANGE              = 12,    -- murderer stab range
+    -- Combat
+    COMBAT_AT_CANDIES       = 50,
+    SHERIFF_SHOOT_RANGE     = 60,
+    TIME_BETWEEN_SHOTS      = 3.4,
+    STAB_RANGE              = 12,
     TIME_BETWEEN_STABS      = 1.5,
 
-    -- Tuning (v0.7: anti-kick defaults)
-    SPEED                   = 18,     -- v0.7: lowered from 26 (kick risk at edge)
-    MAX_FRAME_STEP          = 0.9,    -- hard cap per-frame displacement
-    MAX_DT                  = 0.05,   -- clamp dt before computing step
-    MAX_JUMP                = 25,     -- reject coins requiring a >25 stud jump
-    TIME_ON_COIN            = 0.15,
-    RETRY_AFTER             = 0.6,     -- v0.8: 1.5 -> 0.6 (faster rotation)
-    MAX_ATTEMPTS            = 2,       -- v0.8: >N park-fails -> permanently visited
-    STUCK_TIMEOUT           = 4.0,     -- v0.8: same tripTarget held this long -> abandon
-    STOP_SHORT              = 0,
-    HEIGHT_WEIGHT           = 1,
-    CLUSTER_WEIGHT          = 0,
-    CLUSTER_RADIUS          = 15,
-    AVOID_MURDERER_RADIUS   = 35,
+    -- Movement (v0.11 physics-based)
+    WALK_SPEED              = 40,      -- bumped from default 16 (AC-safe <= 60)
+    HIP_HEIGHT              = 2.0,     -- default humanoid hover above floor
+    JUMP_HEIGHT_DELTA       = 6,       -- coin this far above HRP triggers jump
+    PICK_RADIUS             = 4,       -- consider "touched" if HRP within this
+    STUCK_TIMEOUT           = 2.0,     -- same target this long, bury it
+    MAX_ATTEMPTS            = 1,
+    RETRY_AFTER             = 0.5,
     START_DELAY             = 2,
     MAP_MARGIN              = 20,
 
-    -- Contest
+    -- Danger / contest
+    AVOID_MURDERER_RADIUS   = 35,
+    MURDER_SAFE             = 30,
+    SHERIFF_SAFE            = 20,
+    CONTEST                 = true,
     CONTEST_RADIUS          = 15,
     TIME_MARGIN             = 0.7,
     TIE_MARGIN              = 1.15,
-
-    -- Danger
-    MURDER_SAFE             = 35,
-    SHERIFF_SAFE            = 20,
-
-    -- Physics
-    COIN_REACH_XZ           = 3.0,   -- head-to-coin max XZ (loose, server is auth)
-    COIN_REACH_Y            = 3.0,   -- head-to-coin max Y
+    HEIGHT_WEIGHT           = 1,
 }
 
 -- ───────────────────────────────────────────────
 -- STATE
 -- ───────────────────────────────────────────────
--- v0.6: keyed by coin INSTANCE (weak table so GC'd coins drop out).
 local visited        = setmetatable({}, {__mode = "k"})
 local deferredUntil  = setmetatable({}, {__mode = "k"})
-local attempts       = setmetatable({}, {__mode = "k"})  -- v0.8
-local parkedUntil    = 0
-local parkedCoin     = nil
+local attempts       = setmetatable({}, {__mode = "k"})
 local tripTarget     = nil
-local tripSince      = 0                                 -- v0.8
-local tripPickupBaseline = 0                             -- v0.8
+local tripSince      = 0
+local tripPickupBase = 0
+local lastJumpAt     = 0
 local roundStartAt   = 0
 local candiesThisRound = 0
 
 local myRole         = "innocent"
 local wasFarming     = false
-local headOffset     = 1.5
-local charParts      = {}
 local coinContainer  = nil
 local waitingLabel   = nil
+local defaultWalkSpeed = 16
+local defaultHipHeight = 2
+local defaultAutoRotate = true
 
 local nextShotAt     = 0
 local nextStabAt     = 0
@@ -194,7 +109,6 @@ local Gameplay      = Remotes:WaitForChild("Gameplay")
 local CoinCollected = Gameplay:WaitForChild("CoinCollected")
 local CoinsStarted  = Gameplay:WaitForChild("CoinsStarted")
 
--- Debug bus
 _G.farmDebug = _G.farmDebug or {}
 local DBG = _G.farmDebug
 local lastLogAt = 0
@@ -204,32 +118,18 @@ local function dlog(msg)
     lastLogAt = os.clock()
     print("[farm] " .. msg)
 end
-local function dsync(key, value)
-    if CONFIG.DEBUG_EXPOSE then DBG[key] = value end
-end
-
--- v0.7 guarded CFrame writer: never teleport farther than MAX_JUMP in
--- one step. Returns true on success, false if the jump was rejected.
-local function safeMove(hrp, targetPos)
-    local jump = (targetPos - hrp.Position).Magnitude
-    if jump > CONFIG.MAX_JUMP then
-        return false
-    end
-    -- CFrame.lookAt keeps orientation sensible (facing the move vector).
-    hrp.CFrame = CFrame.new(targetPos)
-    return true
-end
+local function dsync(k, v) if CONFIG.DEBUG_EXPOSE then DBG[k] = v end end
 
 -- ───────────────────────────────────────────────
--- Weapon helpers (role-based combat)
+-- Weapon helpers
 -- ───────────────────────────────────────────────
-local function findHeldTool(nameMatchers)
+local function findHeldTool(matchers)
     local char = lp.Character
     if not char then return nil end
     for _, t in ipairs(char:GetChildren()) do
         if t:IsA("Tool") then
             local n = t.Name:lower()
-            for _, m in ipairs(nameMatchers) do
+            for _, m in ipairs(matchers) do
                 if n:find(m) then return t end
             end
         end
@@ -281,110 +181,83 @@ local function cacheWaitingLabel()
     waitingLabel = gameFrame and gameFrame:FindFirstChild("Waiting") or nil
 end
 
-local function refreshHeadOffset(char)
-    local hrp = char:FindFirstChild("HumanoidRootPart")
-    local head = char:FindFirstChild("Head")
-    if hrp and head then
-        local delta = head.Position.Y - hrp.Position.Y
-        if delta > 0 and delta < 5 then headOffset = delta end
-    end
-end
-
-local function rebuildCharPartsCache(char)
-    table.clear(charParts)
-    for _, p in ipairs(char:GetDescendants()) do
-        if p:IsA("BasePart") then table.insert(charParts, p) end
-    end
-end
-
 -- ───────────────────────────────────────────────
 -- Remote listeners
 -- ───────────────────────────────────────────────
--- v0.6: CoinID is a type tag ("Candy"), not a unique id, so we only
--- count the pickup here. Per-coin dedup is handled by MM2's own
--- per-coin Collected attribute in getBestCoin.
-CoinCollected.OnClientEvent:Connect(function(coinID, a2, a3, a4)
+CoinCollected.OnClientEvent:Connect(function(coinID)
     candiesThisRound = candiesThisRound + 1
     dsync("candiesThisRound", candiesThisRound)
-    dlog(("pickup: type=%s total=%d"):format(tostring(coinID), candiesThisRound))
+    dlog(("pickup type=%s total=%d"):format(tostring(coinID), candiesThisRound))
 end)
 
 CoinsStarted.OnClientEvent:Connect(function()
     visited = setmetatable({}, {__mode = "k"})
     deferredUntil = setmetatable({}, {__mode = "k"})
     attempts = setmetatable({}, {__mode = "k"})
-    tripTarget = nil
-    tripSince = 0
-    tripPickupBaseline = 0
-    parkedCoin = nil
-    parkedUntil = 0
+    tripTarget, tripSince, tripPickupBase = nil, 0, 0
     roundStartAt = os.clock()
     candiesThisRound = 0
-    dlog("CoinsStarted: new round")
     dsync("candiesThisRound", 0)
+    dlog("CoinsStarted: new round")
 end)
 
 -- ───────────────────────────────────────────────
 -- Character / noclip
 -- ───────────────────────────────────────────────
 local noclipStepConn
-local noclipAddConn
-local function restoreCollision()
+
+-- v0.11 noclip: pre-physics, iterates every part live. Humanoid walking
+-- still works because humanoid only needs any collidable part under
+-- the hip-height raycast to stand on — but with ALL CanCollide=false,
+-- the character floats on the humanoid's own HipHeight logic through
+-- any geometry.
+local function noclipStep()
+    if not running or not wasFarming then return end
     local char = lp.Character
     if not char then return end
     for _, p in ipairs(char:GetDescendants()) do
-        if p:IsA("BasePart") then p.CanCollide = true end
+        if p:IsA("BasePart") and p.CanCollide then
+            p.CanCollide = false
+        end
     end
 end
 
--- v0.9: runs BEFORE physics every frame. Hits HRP + torsos explicitly
--- (the parts the server keeps restoring) then the rest via GetDescendants
--- so newly-added bodyparts/tools are caught without a stale cache.
-local function noclipStep()
-    if not running then return end
-    if not wasFarming then return end  -- only noclip while actively farming
-    local char = lp.Character
-    if not char then return end
-    local hrp = char:FindFirstChild("HumanoidRootPart")
-    if hrp then hrp.CanCollide = false end
-    local lt = char:FindFirstChild("LowerTorso"); if lt then lt.CanCollide = false end
-    local ut = char:FindFirstChild("UpperTorso"); if ut then ut.CanCollide = false end
-    local t  = char:FindFirstChild("Torso");      if t  then t.CanCollide  = false end
-    for _, p in ipairs(char:GetDescendants()) do
-        if p:IsA("BasePart") and p.CanCollide then p.CanCollide = false end
-    end
+local function saveDefaults(hum)
+    defaultWalkSpeed = hum.WalkSpeed
+    defaultHipHeight = hum.HipHeight
+    defaultAutoRotate = hum.AutoRotate
+end
+
+local function applyFarmTuning(hum)
+    hum.WalkSpeed  = CONFIG.WALK_SPEED
+    hum.HipHeight  = CONFIG.HIP_HEIGHT
+    hum.AutoRotate = true
+end
+
+local function restoreDefaults(hum)
+    if not hum then return end
+    hum.WalkSpeed  = defaultWalkSpeed
+    hum.HipHeight  = defaultHipHeight
+    hum.AutoRotate = defaultAutoRotate
 end
 
 local function onCharacter(char)
     char:WaitForChild("HumanoidRootPart", 5)
-    refreshHeadOffset(char)
-    rebuildCharPartsCache(char)
     cacheWaitingLabel()
-    -- v0.7: wipe trip/park state so we never chase a target from the
-    -- previous character (different position, possibly in another map).
-    tripTarget   = nil
-    parkedCoin   = nil
-    parkedUntil  = 0
-    wasFarming   = false
-    if noclipAddConn then noclipAddConn:Disconnect() end
-    noclipAddConn = char.DescendantAdded:Connect(function(d)
-        if d:IsA("BasePart") then
-            table.insert(charParts, d)
-            task.defer(function() if d.Parent then d.CanCollide = false end end)
-        end
-    end)
+    tripTarget, tripSince, tripPickupBase = nil, 0, 0
+    wasFarming = false
+    local hum = char:FindFirstChildOfClass("Humanoid")
+    if hum then saveDefaults(hum) end
 end
-
--- v0.9: single global Stepped connection (survives respawns since it
--- re-reads lp.Character each frame). Disconnected only on running=false.
-if noclipStepConn then noclipStepConn:Disconnect() end
-noclipStepConn = RNS.Stepped:Connect(noclipStep)
 
 if lp.Character then onCharacter(lp.Character) end
 lp.CharacterAdded:Connect(onCharacter)
 
 cacheCoinContainer()
 cacheWaitingLabel()
+
+if noclipStepConn then noclipStepConn:Disconnect() end
+noclipStepConn = RNS.Stepped:Connect(noclipStep)
 
 -- ───────────────────────────────────────────────
 -- Gates
@@ -421,8 +294,7 @@ local function getMyRole()
         end
     end
     if lp.Character then
-        local r = scan(lp.Character)
-        if r then return r end
+        local r = scan(lp.Character); if r then return r end
     end
     return scan(lp.Backpack) or "innocent"
 end
@@ -435,16 +307,16 @@ local function getWorldThreats()
             local hrp = p.Character:FindFirstChild("HumanoidRootPart")
             local hum = p.Character:FindFirstChildOfClass("Humanoid")
             if hrp and hum and hum.Health > 0 then
-                table.insert(players, {p = p, hrp = hrp, hum = hum, speed = math.max(1, hum.WalkSpeed)})
+                table.insert(players, {p=p, hrp=hrp, hum=hum, speed=math.max(1, hum.WalkSpeed)})
                 for _, t in ipairs(p.Character:GetChildren()) do
                     if t:IsA("Tool") then
                         local n = t.Name:lower()
                         if n:find("knife") then
-                            murderer = {p = p, hrp = hrp, hum = hum}
-                            table.insert(threats, { pos = hrp.Position, dist = CONFIG.MURDER_SAFE, kind = "murderer" })
+                            murderer = {p=p, hrp=hrp, hum=hum}
+                            table.insert(threats, {pos=hrp.Position, dist=CONFIG.MURDER_SAFE, kind="murderer"})
                         elseif (n:find("gun") or n:find("sheriff") or n:find("revolver"))
                             and myRole == "innocent" then
-                            table.insert(threats, { pos = hrp.Position, dist = CONFIG.SHERIFF_SAFE, kind = "sheriff" })
+                            table.insert(threats, {pos=hrp.Position, dist=CONFIG.SHERIFF_SAFE, kind="sheriff"})
                         end
                     end
                 end
@@ -470,10 +342,10 @@ local function insideMap(pos)
     if parent and parent:IsA("Model") then
         local ok, cf, size = pcall(parent.GetBoundingBox, parent)
         if ok then
-            local corner = cf.Position
-            local half = size / 2 + Vector3.new(1, 1, 1) * CONFIG.MAP_MARGIN
-            local d = pos - corner
-            if math.abs(d.X) <= half.X and math.abs(d.Y) <= half.Y and math.abs(d.Z) <= half.Z then
+            local c = cf.Position
+            local h = size / 2 + Vector3.new(1, 1, 1) * CONFIG.MAP_MARGIN
+            local d = pos - c
+            if math.abs(d.X) <= h.X and math.abs(d.Y) <= h.Y and math.abs(d.Z) <= h.Z then
                 return true
             end
             return false
@@ -483,7 +355,7 @@ local function insideMap(pos)
 end
 
 -- ───────────────────────────────────────────────
--- Contest / coin scoring
+-- Coin scoring
 -- ───────────────────────────────────────────────
 local function arrivalTime(from, to, speed) return (from - to).Magnitude / speed end
 
@@ -506,96 +378,68 @@ local function weightedDist(from, to)
     return math.sqrt(dx*dx + dz*dz + (dy * CONFIG.HEIGHT_WEIGHT)^2)
 end
 
-local function clusterBonus(coinPos, allCoins)
-    if CONFIG.CLUSTER_WEIGHT <= 0 then return 0 end
-    local count = 0
-    for _, c in ipairs(allCoins) do
-        if c:IsA("BasePart") and c.Parent and (c.Position - coinPos).Magnitude < CONFIG.CLUSTER_RADIUS then
-            count = count + 1
-        end
-    end
-    return count * CONFIG.CLUSTER_WEIGHT
-end
-
+-- v0.11: iterate Coin_Server (the Part with TouchInterest) via its
+-- child CoinVisual (which carries the CollectionService tag).
 local function getBestCoin(myPos, mySpeed)
     local threats, murderer, players = getWorldThreats()
     local murdererPos = murderer and murderer.hrp.Position or nil
-    local allCoins = CollectionService:GetTagged("CoinVisual")
-    local bS, bSD = nil, math.huge
-    local bA, bAD = nil, math.huge
+    local allVisuals = CollectionService:GetTagged("CoinVisual")
+    local best, bestScore = nil, math.huge
     local now = os.clock()
-    for _, coin in ipairs(allCoins) do
-        local deferTs = deferredUntil[coin]
-        if coin:IsA("BasePart")
-            and coin.Parent
-            and not coin:GetAttribute("Collected")
-            and not coin:GetAttribute("RoundEnd")
-            and not visited[coin]
-            and (not deferTs or now >= deferTs)
+    for _, visual in ipairs(allVisuals) do
+        local serverPart = visual.Parent  -- Coin_Server (actual pickup target)
+        if serverPart and serverPart:IsA("BasePart")
+            and not visual:GetAttribute("Collected")
+            and not visual:GetAttribute("RoundEnd")
+            and not visited[serverPart]
+            and (not deferredUntil[serverPart] or now >= deferredUntil[serverPart])
         then
-            local pos = coin.Position
+            local pos = serverPart.Position
             if insideMap(pos) then
                 local inMurdererZone = murdererPos and (murdererPos - pos).Magnitude < CONFIG.AVOID_MURDERER_RADIUS
                 local weWin = winsContest(pos, myPos, mySpeed, players)
-                local score = weightedDist(myPos, pos) - clusterBonus(pos, allCoins)
+                local score = weightedDist(myPos, pos)
                 if isSafe(pos, threats) and not inMurdererZone and weWin then
-                    if score < bSD then bS, bSD = coin, score end
+                    if score < bestScore then best, bestScore = serverPart, score end
                 end
-                if score < bAD then bA, bAD = coin, score end
             end
         end
     end
-    return bS or bA
+    return best
 end
 
 -- ───────────────────────────────────────────────
--- Hover / stopFarm
+-- Farm stop (restore on round end / death)
 -- ───────────────────────────────────────────────
-local function setupHover(hrp)
-    local bv = hrp:FindFirstChild("FarmBV") or Instance.new("BodyVelocity", hrp)
-    bv.Name     = "FarmBV"
-    bv.MaxForce = Vector3.new(0, 1e6, 0)
-    bv.P        = 1e5
-    bv.Velocity = Vector3.zero
-    return bv
-end
-
-local function stopFarm(char, hrp, hum)
-    if not char or not hrp or not hum then return end
-    hum.PlatformStand = false
-    local bv = hrp:FindFirstChild("FarmBV")
-    if bv then bv:Destroy() end
-    restoreCollision()
-    parkedCoin = nil
-    parkedUntil = 0
-    tripTarget = nil
+local function stopFarm()
+    local char = lp.Character
+    local hum  = char and char:FindFirstChildOfClass("Humanoid")
+    if hum then restoreDefaults(hum) end
+    tripTarget, tripSince, tripPickupBase = nil, 0, 0
 end
 
 -- ───────────────────────────────────────────────
--- HEARTBEAT
+-- HEARTBEAT (decision + MoveTo)
 -- ───────────────────────────────────────────────
 local farmConn
-farmConn = RNS.Heartbeat:Connect(function(dt)
+farmConn = RNS.Heartbeat:Connect(function()
     if not running then
         farmConn:Disconnect()
-        if noclipAddConn then noclipAddConn:Disconnect() end
         if noclipStepConn then noclipStepConn:Disconnect() end
+        stopFarm()
         return
     end
-
-    -- v0.7: clamp dt so a lag spike never computes a huge step.
-    if dt > CONFIG.MAX_DT then dt = CONFIG.MAX_DT end
 
     local char = lp.Character
     local hum  = char and char:FindFirstChildOfClass("Humanoid")
     local hrp  = char and char:FindFirstChild("HumanoidRootPart")
-    local head = char and char:FindFirstChild("Head")
     if not hum or not hrp or hum.Health <= 0 then return end
 
     if not shouldFarm() then
         if wasFarming then
-            stopFarm(char, hrp, hum)
+            stopFarm()
             wasFarming = false
+            dsync("wasFarming", false)
         end
         return
     end
@@ -603,42 +447,28 @@ farmConn = RNS.Heartbeat:Connect(function(dt)
     if not wasFarming then
         wasFarming = true
         myRole     = getMyRole()
-        refreshHeadOffset(char)
-        rebuildCharPartsCache(char)
-        dlog(("ENGAGE: role=%s head=%.2f parts=%d"):format(myRole, headOffset, #charParts))
+        saveDefaults(hum)
+        applyFarmTuning(hum)
+        dlog(("ENGAGE: role=%s speed=%d"):format(myRole, CONFIG.WALK_SPEED))
         dsync("myRole", myRole)
         dsync("wasFarming", true)
-        dsync("headOffset", headOffset)
     end
 
-    hum.PlatformStand = true
-
-    -- Per-frame noclip over cache (cheap).
-    for _, p in ipairs(charParts) do
-        if p.Parent then p.CanCollide = false end
-    end
-
-    local bv       = hrp:FindFirstChild("FarmBV") or setupHover(hrp)
     local myPos    = hrp.Position
     local mySpeed  = math.max(1, hum.WalkSpeed)
-    local threats, murderer, _ = getWorldThreats()
+    local threats, murderer = getWorldThreats()
 
-    -- ─── COMBAT MODE (candies threshold reached) ───
+    -- ─── COMBAT MODE ───
     if candiesThisRound >= CONFIG.COMBAT_AT_CANDIES then
-        -- Sheriff: shoot the murderer when in range, straight line of sight ignored
         if myRole == "sheriff" and murderer then
             local mhrp = murderer.hrp
-            local toM = (mhrp.Position - myPos)
-            local dist = toM.Magnitude
+            local dist = (mhrp.Position - myPos).Magnitude
             if dist <= CONFIG.SHERIFF_SHOOT_RANGE then
-                -- Face without teleporting (rotate CFrame only, same position)
-                hrp.CFrame = CFrame.lookAt(myPos, Vector3.new(mhrp.Position.X, myPos.Y, mhrp.Position.Z))
+                hum:MoveTo(myPos)  -- stand still (MoveTo to self)
                 tryShoot(mhrp)
-                bv.Velocity = Vector3.zero
                 return
             end
         end
-        -- Murderer: chase nearest player and stab
         if myRole == "murderer" then
             local best, bestD = nil, math.huge
             for _, pl in ipairs(Players:GetPlayers()) do
@@ -653,70 +483,34 @@ farmConn = RNS.Heartbeat:Connect(function(dt)
             end
             if best then
                 if bestD <= CONFIG.STAB_RANGE then
+                    hum:MoveTo(myPos)
                     tryStab()
-                    bv.Velocity = Vector3.zero
-                    return
                 else
-                    local diff = best.Position - myPos
-                    local step = math.min(diff.Magnitude, CONFIG.MAX_FRAME_STEP, CONFIG.SPEED * dt)
-                    safeMove(hrp, myPos + diff.Unit * step)
-                    bv.Velocity = Vector3.zero
-                    return
+                    hum:MoveTo(best.Position)
                 end
+                return
             end
         end
     end
 
-    -- Immediate personal danger
+    -- Immediate personal danger → walk away
     for _, d in ipairs(threats) do
         if (myPos - d.pos).Magnitude < d.dist * 0.6 then
-            local away = myPos - d.pos
+            local away = (myPos - d.pos)
             if away.Magnitude > 0 then
-                local step = math.min(CONFIG.MAX_FRAME_STEP, CONFIG.SPEED * dt)
-                safeMove(hrp, myPos + away.Unit * step)
+                hum:MoveTo(myPos + away.Unit * 20)
             end
-            bv.Velocity = Vector3.zero
-            parkedCoin, parkedUntil, tripTarget = nil, 0, nil
+            tripTarget = nil
             return
         end
     end
 
-    -- Parked (waiting for server-side Collected flag)
-    if parkedCoin and os.clock() < parkedUntil then
-        if (not parkedCoin.Parent) or parkedCoin:GetAttribute("Collected") then
-            -- The server confirmed and either marked collected or destroyed it.
-            visited[parkedCoin] = true
-            parkedCoin, parkedUntil = nil, 0
-        else
-            bv.Velocity = Vector3.zero
-            return
-        end
-    elseif parkedCoin then
-        -- Park window elapsed without confirmation.
-        if parkedCoin.Parent and not parkedCoin:GetAttribute("Collected") then
-            -- v0.8: bump attempt counter. After MAX_ATTEMPTS, bury the coin
-            -- for the whole round so we stop re-selecting an unreachable one.
-            local n = (attempts[parkedCoin] or 0) + 1
-            attempts[parkedCoin] = n
-            if n >= CONFIG.MAX_ATTEMPTS then
-                visited[parkedCoin] = true
-                dlog("discard: max attempts on coin")
-            else
-                deferredUntil[parkedCoin] = os.clock() + CONFIG.RETRY_AFTER
-            end
-        else
-            visited[parkedCoin] = true
-        end
-        parkedCoin, parkedUntil = nil, 0
-    end
-
-    -- Pick a coin
+    -- Pick a coin (operating on Coin_Server parts)
     local coin = getBestCoin(myPos, mySpeed)
     if not coin then
-        bv.Velocity = Vector3.zero
+        hum:MoveTo(myPos)
         tripTarget = nil
         dsync("tripCoinID", "none")
-        dlog("no coin available")
         return
     end
 
@@ -725,82 +519,51 @@ farmConn = RNS.Heartbeat:Connect(function(dt)
         if (murderer.hrp.Position - coin.Position).Magnitude < CONFIG.AVOID_MURDERER_RADIUS then
             deferredUntil[coin] = os.clock() + CONFIG.RETRY_AFTER
             tripTarget = nil
-            bv.Velocity = Vector3.zero
             return
         end
     end
 
     if tripTarget ~= coin then
         tripTarget = coin
-        tripSince = os.clock()
-        tripPickupBaseline = candiesThisRound
-        dsync("tripCoinID", coin:GetAttribute("CoinID"))
+        tripSince  = os.clock()
+        tripPickupBase = candiesThisRound
+        dsync("tripCoinID", coin:GetAttribute("CoinID") or coin.Name)
     else
-        -- v0.8 WATCHDOG: same target too long, no pickup -> bury it.
+        -- Watchdog: same target too long, no pickup → bury it
         if (os.clock() - tripSince) > CONFIG.STUCK_TIMEOUT
-            and candiesThisRound == tripPickupBaseline then
-            visited[coin] = true
+            and candiesThisRound == tripPickupBase then
+            local n = (attempts[coin] or 0) + 1
+            attempts[coin] = n
+            if n >= CONFIG.MAX_ATTEMPTS then
+                visited[coin] = true
+                dlog("discard: stuck timeout")
+            else
+                deferredUntil[coin] = os.clock() + CONFIG.RETRY_AFTER
+            end
             tripTarget = nil
-            bv.Velocity = Vector3.zero
-            dlog("discard: stuck timeout on coin")
             return
         end
     end
 
-    -- v0.5 PICKUP: always target coin.Y - headOffset so the head
-    -- physically overlaps the CoinVisual's hitbox regardless of
-    -- whether the coin is above or below the character. The old
-    -- STAND_ON_FLOOR clamp broke pickup for any coin below the char.
-    local targetY = coin.Position.Y - headOffset
-    if CONFIG.STAND_ON_FLOOR then
-        if targetY < myPos.Y - 1.5 then
-            deferredUntil[coin] = os.clock() + CONFIG.RETRY_AFTER
-            tripTarget = nil
-            bv.Velocity = Vector3.zero
-            return
-        end
-    end
-    local target = Vector3.new(coin.Position.X, targetY, coin.Position.Z)
-
-    if CONFIG.STOP_SHORT > 0 then
-        local dir = target - myPos
-        if dir.Magnitude > CONFIG.STOP_SHORT then
-            target = target - dir.Unit * CONFIG.STOP_SHORT
-        end
-    end
-
-    -- Measure HEAD distance to coin for pickup detection (not HRP target).
-    local headPos = head and head.Position or (myPos + Vector3.new(0, headOffset, 0))
-    local toCoin  = coin.Position - headPos
-    local dXZ     = math.sqrt(toCoin.X^2 + toCoin.Z^2)
-    local dY      = math.abs(toCoin.Y)
-    -- v0.7: no on-reach snap. We keep stepping toward the coin at the
-    -- throttled rate until the server's .Touched fires. Snapping adds
-    -- an extra discrete jump the anti-cheat can flag.
-    if dXZ < CONFIG.COIN_REACH_XZ and dY < CONFIG.COIN_REACH_Y then
-        -- Still move forward a tiny step so we're fully within the
-        -- CoinVisual hitbox, but through safeMove (no big jumps).
-        local diff = target - myPos
-        local step = math.min(diff.Magnitude, CONFIG.MAX_FRAME_STEP, CONFIG.SPEED * dt)
-        if step > 0 then safeMove(hrp, myPos + diff.Unit * step) end
-        bv.Velocity = Vector3.zero
-        parkedCoin  = coin
-        parkedUntil = os.clock() + CONFIG.TIME_ON_COIN
-        dsync("parkedCoinID", coin:GetAttribute("CoinID"))
+    -- If we're inside pickup radius, the Touched already fires naturally
+    -- as the humanoid stands on/near the coin. Just hold position briefly
+    -- so the server can register.
+    local toCoin = coin.Position - myPos
+    local dist   = toCoin.Magnitude
+    if dist < CONFIG.PICK_RADIUS then
+        hum:MoveTo(coin.Position)  -- continue toward exact spot
         return
     end
 
-    local diff = target - myPos
-    local step = math.min(diff.Magnitude, CONFIG.MAX_FRAME_STEP, CONFIG.SPEED * dt)
-    local ok = safeMove(hrp, myPos + diff.Unit * step)
-    if not ok then
-        -- Would have been a jump > MAX_JUMP: defer this coin.
-        deferredUntil[coin] = os.clock() + CONFIG.RETRY_AFTER
-        tripTarget = nil
-        bv.Velocity = Vector3.zero
-        dlog("defer: jump > MAX_JUMP")
-        return
+    -- Jump if coin is well above us (candy on ledges/shelves)
+    if toCoin.Y > CONFIG.JUMP_HEIGHT_DELTA
+       and (os.clock() - lastJumpAt) > 0.9
+       and hum.FloorMaterial ~= Enum.Material.Air then
+        hum.Jump = true
+        lastJumpAt = os.clock()
     end
-    bv.Velocity = Vector3.zero
+
+    -- Walk toward coin. The humanoid handles pathing + replication.
+    hum:MoveTo(coin.Position)
     dsync("lastDecisionAt", os.clock())
 end)
