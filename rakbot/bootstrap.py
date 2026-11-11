@@ -14,7 +14,7 @@ import sys
 import time
 from urllib.error import HTTPError, URLError
 from urllib.parse import parse_qs, urlsplit, urlencode
-from urllib.request import HTTPRedirectHandler, Request, build_opener
+from urllib.request import HTTPRedirectHandler, ProxyHandler, Request, build_opener
 import uuid
 import warnings
 
@@ -194,11 +194,20 @@ class HttpReply:
 
 
 class RobloxHTTP:
-    def __init__(self, timeout: float = 10):
+    def __init__(self, timeout: float = 10, *, proxy_url: str | None = None):
         if not math.isfinite(timeout) or not 0 < timeout <= 10:
             raise BootstrapError("HTTP timeout must be finite and in (0, 10] seconds.")
         self.timeout = timeout
-        self.opener = build_opener(NoRedirect())
+        self.proxy_url = proxy_url
+        if proxy_url:
+            # Route all http+https via the proxy. urllib handles CONNECT
+            # tunnelling for HTTPS automatically when https is mapped.
+            self.opener = build_opener(
+                NoRedirect(),
+                ProxyHandler({"http": proxy_url, "https": proxy_url}),
+            )
+        else:
+            self.opener = build_opener(NoRedirect())
 
     def request(self, url: str, *, credential: Credential | None = None, body: dict | None = None,
                 csrf: str | None = None) -> HttpReply:
@@ -317,9 +326,24 @@ class ConnectionInfo:
 
 
 class RobloxBootstrap:
-    def __init__(self, credential: Credential, *, http: RobloxHTTP | None = None):
+    def __init__(self, credential: Credential, *,
+                 http: RobloxHTTP | None = None,
+                 account_id: int | None = None,
+                 proxy_pool: "ProxyPool | None" = None):
         self._credential = credential
-        self._http = http if http is not None else RobloxHTTP()
+        if http is None:
+            # If a proxy pool is supplied and we have an account_id to
+            # pin against, build an HTTP that routes through that
+            # account's sticky slot. account_id defaults to the first
+            # integer we can derive from the cookie's hash so each
+            # cookie maps to one slot even before we authenticate.
+            proxy_url = None
+            if proxy_pool is not None and proxy_pool.enabled():
+                aid = account_id if account_id is not None else (
+                    abs(hash(credential.value)) % max(proxy_pool.count(), 1))
+                proxy_url = proxy_pool.url_for(aid)
+            http = RobloxHTTP(proxy_url=proxy_url)
+        self._http = http
         self._csrf = None
         self._account = None
         self._identity_until = 0
