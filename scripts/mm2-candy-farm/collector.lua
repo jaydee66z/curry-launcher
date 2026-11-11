@@ -1,125 +1,16 @@
 --[[
-    MM2 CANDY FARM — v0.38 (Curry Launcher)
+    MM2 CANDY FARM — v0.42 (Curry Launcher)
     =======================================
-    v0.38 WALKABLE-GRID INTEGRATION (pathfinder phase 2):
-    Uses _G.farmMaps[currentMap].walkable (populated by the sibling
-    map_recon.lua) to reject candies whose XZ position doesn't have
-    a walkable cell within WALKABLE_SEARCH_RADIUS (12 studs).
-    - nearestWalkableCell(worldPos): O(n) scan of the grid; returns
-      the closest cell {x,y,z} or nil.
-    - In getBestCoin: coins with no nearby walkable cell are skipped
-      (keeps bot inside the real map geometry, not just bbox).
-    - In movement: if coin is at a Y way below the walkable floor
-      (phantom/void candy), target the walkable floor Y instead so
-      we don't dive into the void chasing it.
-    - If no map data is available for the current map (not yet
-      captured, or map_recon not loaded), falls back to v0.37
-      behavior (bbox check only). Safe to run alongside map_recon.
-
-    v0.37 LIGHTER STATIC LOCK (v0.36 was too tight — bot wouldn't
-    move between candies). Operator loves the static look but the
-    SetStateEnabled lockdown also blocked physics updates needed
-    for CFrame-driven HRP translation.
-    - Keep PlatformStand=true, WalkSpeed=0, JumpPower=0, and
-      animation stopping every frame.
-    - Remove SetStateEnabled lockdown so engine physics still
-      process HRP CFrame writes and we move between coins.
-
-    v0.36 HARD STATIC MANNEQUIN (video reference):
-    - v0.35 PlatformStand=true wasn't enough — humanoid kept
-      flipping back to Running state and playing animations.
-    - v0.36 locks Humanoid completely:
-      * PlatformStand=true
-      * WalkSpeed=0, JumpPower=0
-      * SetStateEnabled(false) for EVERY humanoid state except
-        PlatformStanding + None (one-time lock, stored in
-        _G.farmStatesLocked). Engine can't enter Running/Falling/
-        Jumping/Freefall/etc.
-      * ChangeState(PlatformStanding) each frame
-      * Animator tracks force-stopped each frame
-    - stopFarm restores state enables + walkspeed/jump so lobby
-      behavior is normal when not farming.
-
-    v0.35 STATIC-MODEL TELEPORT-STEP (operator: humanoid walk path
-    wasn't going through walls; wants the character model completely
-    frozen while HRP translates to each coin):
-    - HUMANIZED=false (back to CFrame-step path from v0.15-v0.22).
-    - PlatformStand=true so humanoid no longer drives animations or
-      state changes.
-    - FREEZE_ANIMATIONS=true: on engage and every frame, stop all
-      Animator:GetPlayingAnimationTracks(). Model is a static rig;
-      only HRP position changes.
-    - Full-axis hover BV (set by setupHover when HUMANIZED=false)
-      kills any residual drift so motion is 100% our CFrame writes.
-    - MICRO pauses / jump twitch disabled (ambient humanization off).
-
-    v0.34 KILL THE REJOIN LOOP:
-    - Operator: 'porque entro en un loop donde cada que empieza una
-      ronda rejoinea?'. v0.31 hard-snap + 15s teleport rescue fired
-      on every round start because the raycast transiently found no
-      floor while the character was teleporting into the new map.
-    - Soft floor guard only: rise-via-BV when HRP < bbox_bottom - 50.
-      No hard snap, no teleport from the floor path.
-    - Stall watchdog window relaxed 60 -> 180s so round transitions
-      don't trip the stall teleport either.
-    - FLOOR_RESCUE_TIMEOUT effectively disabled (9999).
-
-    v0.31 HARD FLOOR SNAP + TIGHTER STALL:
-    - Previous version got stuck 'RISING_NO_FLOOR' (slow climb via BV)
-      for 80+ seconds without reaching the map. Problem: slow Y rise
-      could not escape pockets where the raycast kept finding no
-      floor (holes in ceiling / above-map voids).
-    - v0.31 now HARD SNAPs HRP to map bbox center when below bbox
-      bottom - 20 OR no floor detected. No more slow rise.
-    - After FLOOR_RESCUE_TIMEOUT (15s) stuck in the snap-loop,
-      teleport to a fresh server.
-    - Ceiling-snap: if HRP > bboxTop + 10, snap to bbox center too.
-    - Stall watchdog window tightened 150s -> 60s.
-
-    v0.30 VISUAL-ONLY HIDE + STALL WATCHDOG:
-    - Removed the v0.25 "noclip entire map" behavior. That's what
-      caused the fall-at-round-start: when every map part became
-      CanCollide=false the character had nothing to stand on and
-      dropped through the floor.
-    - Replaced with hideMapVisual(): sets Transparency=1 and
-      CastShadow=false on map parts (collision preserved). Saves
-      GPU/CPU without breaking floor support.
-    - Stall watchdog: if _G.farmLifetimeCandies doesn't increase
-      for STALL_NO_PICKUP_WINDOW (150s) while farming, teleport to
-      a fresh server instance automatically.
-
-    v0.29 ANTI-VOID-FALL AT ROUND START:
-    - Floor-raycast guard before every humanized move: if no floor
-      within 15 studs below HRP, force +SPEED Y velocity to rise
-      back to geometry. Fixes the "bot falls through floor when
-      noclip engages at round start" scenario.
-    - Y descent CAPPED to -3 studs/sec (was -SPEED). Floor-level
-      candies used to produce vy = -60 which teleport-dropped us
-      through the noclipped floor into the void.
-    - Hover BV is now instantiated AT THE INSTANT wasFarming engages
-      (not lazily in the step), so there's no gravity-only frame
-      between noclip-on and BV-created.
-
-    v0.28 DISCORD WEBHOOK ON RARE DROP (operator asks for Embersickle
-    notify, common + chroma variants).
-    - CONFIG.WEBHOOK_URL: paste your Discord webhook (or set env-style
-      before running). CONFIG.NOTIFY_ITEMS = {"embersickle"} by default.
-    - Match is case-insensitive substring over the item string returned
-      by OpenCrate. If the match string also contains "chroma", variant
-      flagged as chroma (gold embed), otherwise common (orange embed).
-    - Payload: Account username + UserId, item name, variant.
-    - Transport: executor-agnostic http_request / request / syn.request
-      / fluxus.request / http.request (first one that exists wins).
-
-    v0.27 BOX RESULT LOGGING:
-    - OpenCrate:InvokeServer return value now captured (pcall with
-      return) and described through describeBoxResult() — handles
-      string / number / Instance / table (MM2 drop table has
-      {ItemName=..., Rarity=...}).
-    - Each successful open prints: [box #N] OPENED item=X candies
-      before -> after (-spent).
-    - _G.farmBoxHistory keeps last 50 drops: {t, item, before,
-      after, idx}. _G.farmDebug.lastBoxItem mirrors the newest.
+    v0.42 ADDITIONS TO v0.26 (operator's preferred baseline):
+    - FREEZE_ANIMATIONS=true: humanoid still runs MoveTo (physical
+      movement intact) but every playing animation track is stopped
+      each frame — character slides around in a static idle pose.
+      Looks like a frozen model gliding to each candy.
+    - MAX_PICK_DISTANCE doubled 120 -> 240 so the bot chases candies
+      farther away in large maps.
+    - STUCK_TIMEOUT 5 -> 6s per operator ("si tarda mas de 6 segundos
+      en agarrar un candie toma otro").
+    - JUMP_CHANCE 0.015 -> 0 (jumps break the static look).
 
     v0.26 NO MINI-TELEPORT ON PICKUP (operator: "que se mueva hasta
     la direccion donde se miniteletransporta"):
@@ -298,37 +189,26 @@ local CONFIG = {
     BOX_BUY_THRESHOLD       = 600,
     BOX_NAME                = "Halloween2026Box",
 
-    -- v0.28: Discord webhook — notify on rare drops
-    WEBHOOK_ENABLED         = true,
-    WEBHOOK_URL             = "PASTE_YOUR_DISCORD_WEBHOOK_HERE",
-    NOTIFY_ITEMS            = {           -- lowercase substrings to match
-        "embersickle",
-    },
-
     -- v0.24: auto-rejoin on kick / disconnect prompt
     AUTO_REJOIN             = true,
     REJOIN_POLL_INTERVAL    = 1.0,
-
-    -- v0.30: stall watchdog — teleport to new server if no progress
-    STALL_WATCHDOG          = true,
-    STALL_NO_PICKUP_WINDOW  = 180,    -- v0.34: 60 -> 180 (less aggressive)
-    FLOOR_RESCUE_TIMEOUT    = 9999,   -- v0.34: effectively disabled
     SHERIFF_SHOOT_RANGE     = 60,
     TIME_BETWEEN_SHOTS      = 3.4,
     STAB_RANGE              = 12,
     TIME_BETWEEN_STABS      = 1.5,
 
-    -- Movement (v0.35: static model + CFrame teleport-step, noclip real)
-    HUMANIZED               = false,   -- v0.35: back to CFrame mode per op
-    FREEZE_ANIMATIONS       = true,    -- v0.35: stop all humanoid anim tracks
-    SPEED                   = 26,      -- CFrame cadence
-    FORCE_WALKSPEED         = 16,      -- humanoid declared speed (AC ref)
-    MAX_FRAME_STEP          = 1.1,
-    COOLDOWN_BETWEEN_COINS  = 0.1,
-    MICRO_PAUSE_MIN         = 0,
-    MICRO_PAUSE_MAX         = 0,
+    -- Movement (v0.23: humanized — humanoid walks with animations,
+    -- noclip still bypasses walls, final snap for pickup accuracy)
+    HUMANIZED               = true,    -- v0.23: use Humanoid:MoveTo + anims
+    FREEZE_ANIMATIONS       = true,    -- v0.42: stop anim tracks each frame (static pose while walking)
+    SPEED                   = 16,
+    FORCE_WALKSPEED         = 16,
+    MAX_FRAME_STEP          = 0.3,
+    COOLDOWN_BETWEEN_COINS  = 0.2,
+    MICRO_PAUSE_MIN         = 0.05,
+    MICRO_PAUSE_MAX         = 0.18,
     SNAP_FINAL_DISTANCE     = 0,
-    JUMP_CHANCE             = 0,
+    JUMP_CHANCE             = 0,       -- v0.42: off (static look)
     JUMP_COOLDOWN           = 999,
 
     -- Pathing intelligence (v0.19 softened)
@@ -337,17 +217,9 @@ local CONFIG = {
     MAX_WALLS_HARD_LIMIT    = 99,         -- no hard limit (softened)
     FAR_WITH_WALLS_LIMIT    = 9999,       -- no defer-by-walls
     NEAR_PREFERENCE_RADIUS  = 25,
-    MAX_PICK_DISTANCE       = 120,        -- v0.20: never chase farther than this
-    RESCUE_IF_NO_COIN_WITHIN = 200,       -- if nearest > this -> rescue
+    MAX_PICK_DISTANCE       = 240,        -- v0.42: doubled (was 120)
+    RESCUE_IF_NO_COIN_WITHIN = 300,       -- if nearest > this -> rescue
     CLUSTER_PREFERENCE      = true,
-
-    -- v0.39: walkable-grid filter (soft) — scores coins by walkable
-    -- proximity but NEVER hard-rejects. If no cell nearby, bot still
-    -- chases via bbox fallback. Hard rejection in v0.38 was killing
-    -- every candy on partially-scanned maps.
-    USE_WALKABLE_GRID       = true,
-    WALKABLE_SEARCH_RADIUS  = 25,        -- bumped 12 -> 25 (looser)
-    WALKABLE_HARD_FILTER    = false,     -- v0.39: soft mode
     MAX_DT                  = 0.05,
     MAX_JUMP                = 25,
     DIR_SMOOTH              = 0.25,    -- v0.15: heading lerp factor per frame
@@ -356,7 +228,7 @@ local CONFIG = {
     TIME_ON_COIN            = 1.0,
     RETRY_AFTER             = 0.4,
     MAX_ATTEMPTS            = 4,
-    STUCK_TIMEOUT           = 5.0,
+    STUCK_TIMEOUT           = 6.0,      -- v0.42: 5 -> 6 per operator
     START_DELAY             = 2,
     MAP_MARGIN              = 20,
 
@@ -537,55 +409,23 @@ CoinCollected.OnClientEvent:Connect(function(coinID)
     dlog(("pickup type=%s round=%d life=%d"):format(tostring(coinID), candiesThisRound, _G.farmLifetimeCandies))
 end)
 
--- v0.30: VISUAL-ONLY hide (CPU savings) — invisible walls/furniture
--- but COLLISION PRESERVED so the character stands on the floor
--- normally. Skips coins and the character.
-local function hideModelVisual(root)
-    if not root then return 0 end
-    local lp = Players.LocalPlayer
-    local myChar = lp and lp.Character
-    local count = 0
-    for _, p in ipairs(root:GetDescendants()) do
-        if p:IsA("BasePart") then
-            local name = p.Name
-            local isCoin = name:find("Coin") or name:find("Candy")
-            local isMine = myChar and p:IsDescendantOf(myChar)
-            if not isCoin and not isMine then
-                if p.Transparency < 1 then p.Transparency = 1 end
-                if p.CastShadow then p.CastShadow = false end
-                count = count + 1
-            end
-        end
-    end
-    return count
-end
-
-local function hideMapVisual()
+-- v0.25: strip every collision in the current map model on round start.
+-- "Eliminate" per operator means: nothing in the map blocks movement.
+-- We don't Destroy parts (that breaks game logic), just set CanCollide
+-- =false + CanTouch=true on every BasePart in the map's root Model.
+local function noclipEntireMap()
     cacheCoinContainer()
     if not coinContainer then return 0 end
-    local n = hideModelVisual(coinContainer.Parent)
-    dlog(("map visual-hide applied: %d parts"):format(n))
-    return n
-end
-
--- v0.35: lobby visual hide. MM2 lobby often lives in workspace.Lobby
--- or just as a bunch of top-level Models. We hide everything in
--- workspace that isn't a player character, the coinContainer, or the
--- current round map.
-local function hideLobbyVisual()
-    local lp = Players.LocalPlayer
-    local myChar = lp and lp.Character
-    local roundMap = coinContainer and coinContainer.Parent
+    local root = coinContainer.Parent
+    if not root then return 0 end
     local count = 0
-    for _, child in ipairs(workspace:GetChildren()) do
-        if child ~= myChar and child ~= roundMap
-           and not child:FindFirstChildOfClass("Humanoid") then
-            if child:IsA("Model") or child:IsA("BasePart") or child:IsA("Folder") then
-                count = count + hideModelVisual(child)
-            end
+    for _, p in ipairs(root:GetDescendants()) do
+        if p:IsA("BasePart") and p.CanCollide then
+            p.CanCollide = false
+            count = count + 1
         end
     end
-    dlog(("lobby visual-hide applied: %d parts"):format(count))
+    dlog(("map noclip applied: %d parts"):format(count))
     return count
 end
 
@@ -605,12 +445,11 @@ CoinsStarted.OnClientEvent:Connect(function()
     roundStartAt = os.clock()
     candiesThisRound = 0
     dsync("candiesThisRound", 0)
-    -- v0.30: visual-only hide (no collision changes) for CPU savings.
-    -- Collision stays intact so character has a floor to stand on.
+    -- v0.25: strip the whole map's collision so nothing can wedge us
     task.spawn(function()
-        task.wait(0.8)
-        local n = hideMapVisual()
-        dsync("mapHiddenParts", n)
+        task.wait(0.8)  -- let map load fully
+        local n = noclipEntireMap()
+        dsync("mapNoclipParts", n)
     end)
     dlog("CoinsStarted: new round")
 end)
@@ -700,135 +539,9 @@ if CONFIG.AUTO_REJOIN then
 end
 
 -- ───────────────────────────────────────────────
--- v0.35: periodic lobby visual-hide
-task.spawn(function()
-    while running do
-        pcall(hideLobbyVisual)
-        task.wait(8)
-    end
-end)
-
--- v0.30: stall watchdog — if no pickup in STALL_NO_PICKUP_WINDOW
--- seconds while farming, teleport to a fresh server (instance).
--- ───────────────────────────────────────────────
-if CONFIG.STALL_WATCHDOG then
-    task.spawn(function()
-        local TeleportService = game:GetService("TeleportService")
-        local lastKnownLife = _G.farmLifetimeCandies or 0
-        local lastChangeAt  = os.clock()
-        while running do
-            task.wait(10)
-            local life = _G.farmLifetimeCandies or 0
-            -- v0.32: reset timer during lobby / non-farming windows so
-            -- the watchdog never fires from waiting for a round to
-            -- start (shouldFarm=false has no pickup activity).
-            if not (_G.farmDebug and _G.farmDebug.wasFarming) then
-                lastChangeAt = os.clock()
-            elseif life > lastKnownLife then
-                lastKnownLife = life
-                lastChangeAt  = os.clock()
-            else
-                local idle = os.clock() - lastChangeAt
-                if idle > CONFIG.STALL_NO_PICKUP_WINDOW then
-                    _G.farmRejoinCount = (_G.farmRejoinCount or 0) + 1
-                    _G.farmLastKickReason = "stall-no-pickup"
-                    dsync("rejoinCount", _G.farmRejoinCount)
-                    dsync("lastKickReason", "stall-no-pickup")
-                    print(("[farm/stall] %ds farming without pickup -> teleporting to new server"):format(math.floor(idle)))
-                    pcall(function() TeleportService:Teleport(game.PlaceId, lp) end)
-                    task.wait(15)
-                    lastChangeAt = os.clock()
-                end
-            end
-        end
-    end)
-end
-
--- ───────────────────────────────────────────────
--- v0.27: Halloween Box auto-opener (parallel task)
--- Captures the InvokeServer return value so we know what item
--- dropped from each box, stores a history and prints it.
+-- v0.21: Halloween Box auto-opener (parallel task)
 -- ───────────────────────────────────────────────
 _G.farmBoxesOpened = _G.farmBoxesOpened or 0
-_G.farmBoxHistory  = _G.farmBoxHistory or {}  -- list of {t, item, before, after}
-
--- v0.28: executor-agnostic HTTP POST. Tries the common exported
--- names (http_request / request / syn.request / fluxus.request).
-local function execHttp(payload)
-    local fn = (http_request) or (request) or (syn and syn.request) or (fluxus and fluxus.request) or (http and http.request)
-    if not fn then return nil, "no http function" end
-    local ok, resp = pcall(fn, payload)
-    if not ok then return nil, tostring(resp) end
-    return resp
-end
-
-local function discordNotify(itemName, variant)
-    if not CONFIG.WEBHOOK_ENABLED then return end
-    local url = CONFIG.WEBHOOK_URL or ""
-    if url == "" or url:find("PASTE_YOUR") then
-        warn("[farm/webhook] WEBHOOK_URL not set; skipping")
-        return
-    end
-    local user  = lp.Name
-    local uid   = lp.UserId
-    local color = (variant == "chroma") and 15844367 or 11027200  -- gold vs orange
-    local body = string.format(
-        '{"username":"MM2 Farm","embeds":[{"title":"%s DROP","description":"Account: **%s** (UserId %d)\\nItem: **%s**\\nVariant: **%s**","color":%d}]}',
-        itemName:upper(), user, uid, itemName, variant, color
-    )
-    local resp, err = execHttp({
-        Url = url, Method = "POST",
-        Headers = {["Content-Type"] = "application/json"},
-        Body = body,
-    })
-    if resp then
-        print(("[farm/webhook] notified %s (%s) → %s"):format(itemName, variant, tostring(resp.StatusCode or resp.Status or "?")))
-    else
-        warn(("[farm/webhook] POST failed: %s"):format(tostring(err)))
-    end
-end
-
--- v0.28: rare-drop watcher — scans the box result/item string for
--- any substring from CONFIG.NOTIFY_ITEMS (case-insensitive), decides
--- variant by looking for "chroma" in the match, fires discordNotify.
-local function checkRareDrop(itemStr)
-    if not itemStr or itemStr == "" then return end
-    local lower = itemStr:lower()
-    for _, needle in ipairs(CONFIG.NOTIFY_ITEMS) do
-        if lower:find(needle, 1, true) then
-            local variant = lower:find("chroma", 1, true) and "chroma" or "common"
-            -- Extract a clean name (prefer the first "word" that includes needle)
-            local clean = itemStr
-            discordNotify(clean, variant)
-            break
-        end
-    end
-end
-
-local function describeBoxResult(result)
-    if result == nil then return "nil" end
-    local t = typeof(result)
-    if t == "string" or t == "number" or t == "boolean" then return tostring(result) end
-    if t == "Instance" then
-        return string.format("%s<%s>", result.ClassName, result.Name)
-    end
-    if t == "table" then
-        -- common MM2 shape: {ItemName=..., Rarity=..., ...}
-        if result.ItemName then
-            local rarity = result.Rarity and (" ["..tostring(result.Rarity).."]") or ""
-            return tostring(result.ItemName) .. rarity
-        end
-        -- else dump first few keys
-        local keys = {}
-        for k, v in pairs(result) do
-            table.insert(keys, string.format("%s=%s", tostring(k), tostring(v)))
-            if #keys >= 4 then break end
-        end
-        return "{" .. table.concat(keys, ", ") .. "}"
-    end
-    return t .. "(" .. tostring(result) .. ")"
-end
-
 if CONFIG.AUTO_BUY_BOX then
     task.spawn(function()
         local Shop = ReplicatedStorage:WaitForChild("Remotes"):WaitForChild("Shop")
@@ -847,28 +560,15 @@ if CONFIG.AUTO_BUY_BOX then
             dsync("profileCandies", c)
             if c >= CONFIG.BOX_BUY_THRESHOLD then
                 local before = c
-                local okInv, result = pcall(function()
-                    return OpenCrate:InvokeServer(CONFIG.BOX_NAME, "MysteryBox", "Candies2026")
-                end)
+                pcall(function() OpenCrate:InvokeServer(CONFIG.BOX_NAME, "MysteryBox", "Candies2026") end)
                 task.wait(0.4)
                 local after = getCandies()
-                local spent = before - after
-                if spent >= CONFIG.BOX_BUY_THRESHOLD then
+                if (before - after) >= CONFIG.BOX_BUY_THRESHOLD then
                     _G.farmBoxesOpened = _G.farmBoxesOpened + 1
-                    local item = okInv and describeBoxResult(result) or "pcall_err"
-                    local entry = {t=os.clock(), item=item, before=before, after=after, idx=_G.farmBoxesOpened}
-                    table.insert(_G.farmBoxHistory, entry)
-                    if #_G.farmBoxHistory > 50 then table.remove(_G.farmBoxHistory, 1) end
                     dsync("boxesOpened", _G.farmBoxesOpened)
-                    dsync("lastBoxItem", item)
-                    print(("[box #%d] OPENED  item=%s  candies %d -> %d (-%d)"):format(
-                        _G.farmBoxesOpened, item, before, after, spent))
-                    -- v0.28: rare drop check
-                    pcall(checkRareDrop, item)
+                    dlog(("box OPENED #%d (candies %d -> %d)"):format(_G.farmBoxesOpened, before, after))
                 else
-                    local item = okInv and describeBoxResult(result) or "pcall_err"
-                    print(("[box] buy FAILED (candies %d -> %d, result=%s)"):format(
-                        before, after, item))
+                    dlog(("box buy failed (candies %d -> %d)"):format(before, after))
                     task.wait(3)
                 end
             end
@@ -1009,31 +709,6 @@ local function countWallsBetween(fromPos, toPos, charExclude)
     return walls
 end
 
--- v0.38: walkable-grid lookup. Returns the nearest walkable cell's
--- {x,y,z} within WALKABLE_SEARCH_RADIUS, or nil if none.
--- _G.farmMaps is populated by map_recon.lua.
-local function nearestWalkableCell(worldPos)
-    if not CONFIG.USE_WALKABLE_GRID then return {y = worldPos.Y} end
-    if not coinContainer or not coinContainer.Parent then return {y = worldPos.Y} end
-    local mapName = coinContainer.Parent.Name
-    local mapData = _G.farmMaps and _G.farmMaps[mapName]
-    if not mapData or not mapData.walkable then
-        return {y = worldPos.Y}  -- no grid yet; accept the coin
-    end
-    local step = mapData.gridStep or 6
-    local radius = CONFIG.WALKABLE_SEARCH_RADIUS
-    local bestCell, bestD = nil, math.huge
-    for _, cell in ipairs(mapData.walkable) do
-        local dx = cell.x - worldPos.X
-        local dz = cell.z - worldPos.Z
-        local d  = math.sqrt(dx*dx + dz*dz)
-        if d < bestD and d <= radius then
-            bestCell, bestD = cell, d
-        end
-    end
-    return bestCell
-end
-
 -- v0.12: target Coin_Server (the Part with TouchInterest), iterate via
 -- its tagged CoinVisual child.
 local function getBestCoin(myPos, mySpeed)
@@ -1061,22 +736,10 @@ local function getBestCoin(myPos, mySpeed)
                 if CONFIG.WALL_RAYCAST then
                     walls = countWallsBetween(myPos, pos, char)
                 end
-                -- v0.40: clean scoring, no goto. Walkable-grid is a soft
-                -- score bias only unless WALKABLE_HARD_FILTER=true.
-                local walkableBonus = 0
-                local skip = false
-                if CONFIG.USE_WALKABLE_GRID then
-                    local cell = nearestWalkableCell(pos)
-                    if cell == nil then
-                        if CONFIG.WALKABLE_HARD_FILTER then
-                            skip = true
-                        else
-                            walkableBonus = 8
-                        end
-                    end
-                end
-                if not skip and baseDist <= CONFIG.MAX_PICK_DISTANCE then
-                    local score = baseDist + walls * CONFIG.WALL_PENALTY + walkableBonus
+                -- v0.19: no hard filters, pure scoring. Softer wall penalty
+                -- plus a near-preference bonus. Hard distance cap only.
+                if baseDist <= CONFIG.MAX_PICK_DISTANCE then
+                    local score = baseDist + walls * CONFIG.WALL_PENALTY
                     if baseDist < CONFIG.NEAR_PREFERENCE_RADIUS then
                         score = score - (CONFIG.NEAR_PREFERENCE_RADIUS - baseDist) * 0.5
                     end
@@ -1105,9 +768,7 @@ end
 local function stopFarm(char, hrp, hum)
     if not char or not hrp or not hum then return end
     hum.PlatformStand = false
-    hum.WalkSpeed = 16
-    hum.JumpPower = 50
-    -- (v0.36 state locking removed; nothing to restore)
+    hum.WalkSpeed = 16  -- restore default so lobby/menu feels normal
     local bv = hrp:FindFirstChild("FarmBV"); if bv then bv:Destroy() end
     for _, p in ipairs(char:GetDescendants()) do
         if p:IsA("BasePart") then p.CanCollide = true end
@@ -1149,18 +810,6 @@ farmConn = RNS.Heartbeat:Connect(function(dt)
         refreshHeadOffset(char)
         smoothDir  = Vector3.new(hrp.CFrame.LookVector.X, 0, hrp.CFrame.LookVector.Z)
         if smoothDir.Magnitude < 0.01 then smoothDir = Vector3.new(0,0,1) else smoothDir = smoothDir.Unit end
-        -- v0.29: hover BV at engage so no gravity gap
-        local bvEarly = setupHover(hrp)
-        bvEarly.Velocity = Vector3.new(0, 0, 0)
-        -- v0.35: freeze all humanoid animations so model is static
-        if CONFIG.FREEZE_ANIMATIONS then
-            local animator = hum:FindFirstChildOfClass("Animator")
-            if animator then
-                for _, track in ipairs(animator:GetPlayingAnimationTracks()) do
-                    pcall(function() track:Stop(0) end)
-                end
-            end
-        end
         dlog(("ENGAGE: role=%s head=%.2f speed=%d"):format(myRole, headOffset, CONFIG.SPEED))
         dsync("myRole", myRole)
         dsync("wasFarming", true)
@@ -1178,20 +827,16 @@ farmConn = RNS.Heartbeat:Connect(function(dt)
     if CONFIG.HUMANIZED then
         hum.PlatformStand = false
     else
-        -- v0.37 STATIC MANNEQUIN (lighter): PlatformStand + WalkSpeed=0
-        -- + anim stop — enough to keep the rig frozen while CFrame
-        -- writes physically translate the HRP. No SetStateEnabled
-        -- lockdown (v0.36 version blocked physics too; bot stopped
-        -- moving between coins).
         hum.PlatformStand = true
-        hum.WalkSpeed     = 0
-        hum.JumpPower     = 0
-        if CONFIG.FREEZE_ANIMATIONS then
-            local animator = hum:FindFirstChildOfClass("Animator")
-            if animator then
-                for _, track in ipairs(animator:GetPlayingAnimationTracks()) do
-                    pcall(function() track:Stop(0) end)
-                end
+    end
+
+    -- v0.42: freeze animations each frame so the character slides
+    -- in a static pose while MoveTo still drives physical movement.
+    if CONFIG.FREEZE_ANIMATIONS then
+        local animator = hum:FindFirstChildOfClass("Animator")
+        if animator then
+            for _, track in ipairs(animator:GetPlayingAnimationTracks()) do
+                pcall(function() track:Stop(0) end)
             end
         end
     end
@@ -1409,27 +1054,8 @@ farmConn = RNS.Heartbeat:Connect(function(dt)
     -- v0.14: target HRP at coin.Position. Move until close, then fire
     -- GetCoin:FireServer(coin) — the server accepts it and sets
     -- Collected=true without needing Touched to fire.
-    -- v0.38: if we have a walkable cell near this coin, use its floor
-    -- Y so we stand on real geometry (not float at the coin's Y which
-    -- might be mid-air for shelf candies).
     local coinPos = coin.Position
     local target  = coinPos
-    if CONFIG.USE_WALKABLE_GRID then
-        local cell = nearestWalkableCell(coinPos)
-        if cell and cell.y then
-            -- Stand ON the walkable floor; if coin is above, we'll jump/rise
-            local walkY = cell.y + 2  -- hover 2 studs above floor
-            -- but still aim at coin.Y for pickup
-            target = Vector3.new(coinPos.X, coinPos.Y, coinPos.Z)
-            -- Only clamp if coin is way above the walkable floor (shelf)
-            if coinPos.Y > walkY + 8 then
-                -- shelf candy — stay at coin level
-            elseif coinPos.Y < walkY - 2 then
-                -- coin is below floor somehow; go to walkY to avoid void
-                target = Vector3.new(coinPos.X, walkY, coinPos.Z)
-            end
-        end
-    end
     local hrpToCoin = (coinPos - myPos).Magnitude
 
     -- Within fire radius: fire GetCoin remote
@@ -1483,29 +1109,6 @@ farmConn = RNS.Heartbeat:Connect(function(dt)
         end
     end
 
-    -- v0.34 FLOOR GUARD (soft): only rise-via-BV if clearly in the
-    -- void, no hard snaps, no teleports. The character naturally
-    -- settles on map geometry (humanoid raycasts for floor itself)
-    -- so manual rescue is only needed when we fall tens of studs
-    -- below the map. Previous hard-snap+teleport caused a rejoin
-    -- loop on every round start.
-    if CONFIG.HUMANIZED and coinContainer and coinContainer.Parent then
-        local okBB, cf, sz = pcall(coinContainer.Parent.GetBoundingBox, coinContainer.Parent)
-        if okBB then
-            local bbBottom = cf.Position.Y - sz.Y/2
-            local wayBelow = myPos.Y < bbBottom - 50
-            if wayBelow then
-                -- Rise slowly via BV — never teleport, never hard-snap
-                bv.Velocity = Vector3.new(0, CONFIG.SPEED, 0)
-                hum:MoveTo(myPos)
-                dsync("floorGuard", "RISING_BELOW_MAP")
-                return
-            else
-                dsync("floorGuard", "ok")
-            end
-        end
-    end
-
     -- v0.23 HUMANIZED: let the Humanoid walk toward the coin. MoveTo
     -- drives real locomotion (plays walking animations, rotates the
     -- character naturally, uses the character's own stepping cadence).
@@ -1525,16 +1128,13 @@ farmConn = RNS.Heartbeat:Connect(function(dt)
             hum.Jump = true
             lastJumpAt = os.clock()
         end
-        -- v0.29 Y SYNC: never descend FAST (capped at -3 studs/sec).
-        -- Floor-level candies used to produce vy = -60 which pulled us
-        -- through the noclipped floor into the void at round start.
-        -- We walk DOWN onto a floor candy slowly or stay level and let
-        -- gravity-like micro-descent handle it. Ascend still SPEED cap.
+        -- Sync Y to coin.Y via BV, but CAPPED to WalkSpeed so vertical
+        -- motion matches horizontal (no 200-studs/sec Y yank for
+        -- ceiling/floor candies).
         local targetY = target.Y
         local vy = (targetY - myPos.Y) * 4
-        local upCap = CONFIG.SPEED
-        local downCap = -3
-        if vy > upCap then vy = upCap elseif vy < downCap then vy = downCap end
+        local cap = CONFIG.SPEED
+        if vy > cap then vy = cap elseif vy < -cap then vy = -cap end
         bv.Velocity = Vector3.new(0, vy, 0)
         -- Within final snap distance: freeze XZ at exact coin pos
         if remaining < CONFIG.SNAP_FINAL_DISTANCE then
