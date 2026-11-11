@@ -1,6 +1,18 @@
 --[[
-    MM2 CANDY FARM — v0.30 (Curry Launcher)
+    MM2 CANDY FARM — v0.31 (Curry Launcher)
     =======================================
+    v0.31 HARD FLOOR SNAP + TIGHTER STALL:
+    - Previous version got stuck 'RISING_NO_FLOOR' (slow climb via BV)
+      for 80+ seconds without reaching the map. Problem: slow Y rise
+      could not escape pockets where the raycast kept finding no
+      floor (holes in ceiling / above-map voids).
+    - v0.31 now HARD SNAPs HRP to map bbox center when below bbox
+      bottom - 20 OR no floor detected. No more slow rise.
+    - After FLOOR_RESCUE_TIMEOUT (15s) stuck in the snap-loop,
+      teleport to a fresh server.
+    - Ceiling-snap: if HRP > bboxTop + 10, snap to bbox center too.
+    - Stall watchdog window tightened 150s -> 60s.
+
     v0.30 VISUAL-ONLY HIDE + STALL WATCHDOG:
     - Removed the v0.25 "noclip entire map" behavior. That's what
       caused the fall-at-round-start: when every map part became
@@ -236,7 +248,8 @@ local CONFIG = {
 
     -- v0.30: stall watchdog — teleport to new server if no progress
     STALL_WATCHDOG          = true,
-    STALL_NO_PICKUP_WINDOW  = 150,    -- seconds: no pickup in this window = stall
+    STALL_NO_PICKUP_WINDOW  = 60,     -- v0.31: tightened 150 -> 60
+    FLOOR_RESCUE_TIMEOUT    = 15,     -- v0.31: if stuck in RISING_NO_FLOOR > this, teleport
     SHERIFF_SHOOT_RANGE     = 60,
     TIME_BETWEEN_SHOTS      = 3.4,
     STAB_RANGE              = 12,
@@ -1275,21 +1288,47 @@ farmConn = RNS.Heartbeat:Connect(function(dt)
         end
     end
 
-    -- v0.29 FLOOR GUARD: raycast down from HRP; if no floor within
-    -- 15 studs, we're in the void — force positive Y velocity to
-    -- climb out. Prevents "falls at round start" when noclip engages
-    -- before character has settled on the floor.
-    if CONFIG.HUMANIZED then
-        local rp = RaycastParams.new()
-        rp.FilterType = Enum.RaycastFilterType.Exclude
-        rp.FilterDescendantsInstances = {char}
-        local hit = workspace:Raycast(myPos, Vector3.new(0, -15, 0), rp)
-        if not hit then
-            -- Void below us; rise at SPEED studs/sec until we re-acquire floor
-            bv.Velocity = Vector3.new(0, CONFIG.SPEED, 0)
-            hum:MoveTo(myPos)  -- hold XZ while rising
-            dsync("floorGuard", "RISING_NO_FLOOR")
-            return
+    -- v0.31 FLOOR GUARD: if HRP is below map bbox center or no floor
+    -- below, snap directly to map center (not slow rise). Also clamp
+    -- Y to stay within map bbox range. If still stuck after timeout
+    -- teleport to new server.
+    if CONFIG.HUMANIZED and coinContainer and coinContainer.Parent then
+        local okBB, cf, sz = pcall(coinContainer.Parent.GetBoundingBox, coinContainer.Parent)
+        if okBB then
+            local bbBottom = cf.Position.Y - sz.Y/2
+            local bbTop    = cf.Position.Y + sz.Y/2
+            local rp = RaycastParams.new()
+            rp.FilterType = Enum.RaycastFilterType.Exclude
+            rp.FilterDescendantsInstances = {char}
+            local hit = workspace:Raycast(myPos, Vector3.new(0, -15, 0), rp)
+            local tooLow = myPos.Y < bbBottom - 20
+            local noFloor = (not hit)
+            if tooLow or noFloor then
+                _G.farmVoidSince = _G.farmVoidSince or os.clock()
+                local stuck = os.clock() - _G.farmVoidSince
+                if stuck > CONFIG.FLOOR_RESCUE_TIMEOUT then
+                    print(("[farm/void] stuck %ds -> teleport new server"):format(math.floor(stuck)))
+                    _G.farmVoidSince = nil
+                    pcall(function() game:GetService("TeleportService"):Teleport(game.PlaceId, lp) end)
+                    return
+                end
+                -- Hard snap to map center (CFrame — within MAX_JUMP of
+                -- safeMove is often not; here we direct-CFrame).
+                hrp.CFrame = CFrame.new(cf.Position)
+                bv.Velocity = Vector3.zero
+                dsync("floorGuard", "SNAP_TO_CENTER")
+                return
+            else
+                _G.farmVoidSince = nil
+                dsync("floorGuard", "ok")
+            end
+            -- Also prevent floating too high above map
+            if myPos.Y > bbTop + 10 then
+                hrp.CFrame = CFrame.new(cf.Position)
+                bv.Velocity = Vector3.zero
+                dsync("floorGuard", "SNAP_FROM_CEILING")
+                return
+            end
         end
     end
 
