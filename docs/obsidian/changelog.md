@@ -2,6 +2,15 @@
 
 All notable changes per session. Keep newest at top.
 
+## 2026-11-10 — mm2-0.11 (reescritura física; AC-safe)
+
+- **Reescritura completa** del `collector.lua`: sin CFrame writes, sin PlatformStand, sin BodyVelocity
+- `Humanoid:MoveTo()` + `WalkSpeed=40` + noclip pre-física → el server valida movimiento vs walkspeed y no kickea (código 267 "Invalid position")
+- Verificado en vivo: CFrame-teleport NO dispara el `.Touched` del server (3.5s sobre el coin = cero pickups); hace falta movimiento físico real
+- Target real = `Coin_Server` (el `Part` con `TouchInterest`), NO `CoinVisual` (MeshPart hijo)
+- Añadido jump automático cuando el candy está >6 studs encima del HRP y tocamos suelo
+- Save/restore de `WalkSpeed`/`HipHeight`/`AutoRotate` entre farm y idle
+
 ## 2026-11-10 — mm2-0.9 (real noclip)
 
 - `collector.lua`: noclip movido de `Heartbeat` (post-física) a `RunService.Stepped` (pre-física) — ahora los `CanCollide=false` surten efecto en el mismo frame
