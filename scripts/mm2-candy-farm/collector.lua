@@ -1,6 +1,16 @@
 --[[
-    MM2 CANDY FARM — v0.47 (Curry Launcher)
+    MM2 CANDY FARM — v0.48 (Curry Launcher)
     =======================================
+    v0.48 STRONGER AUTO-REJOIN (operator asked for explicit handling
+    of 'Invalid position' / code 267):
+    - CoreGui prompt matcher now catches "Invalid position" + "267"
+      literally (in addition to the v0.24 catch-all).
+    - Rejoin event also fires a Discord webhook embed (red) with
+      username + reason + count, so operator sees kicks remotely.
+    - Added a Players.PlayerRemoving hook on self as a last-ditch
+      trigger (fires the instant Roblox removes the player from the
+      server, before the prompt UI shows).
+
     v0.47 ANTI-STALL (analyzed 3 rounds via a parallel stall monitor):
     - Stall type A: bot on a candy, nearestDist=0, Touched never fires.
       Fix: in the reach branch, ALSO call GetCoin:FireServer(coin)
@@ -621,33 +631,51 @@ if CONFIG.AUTO_REJOIN then
         local TeleportService = game:GetService("TeleportService")
         local GuiService = game:GetService("GuiService")
         local CoreGui = game:GetService("CoreGui")
+        local HttpService = game:GetService("HttpService")
+        local function notifyKickOnDiscord(why)
+            local url = _G.farmWebhookUrl or ""
+            if url == "" or url:find("PASTE_YOUR") then return end
+            local fn = (http_request) or (request) or (syn and syn.request) or (fluxus and fluxus.request)
+            if not fn then return end
+            local body = HttpService:JSONEncode({
+                username = "MM2 Farm",
+                embeds = {{
+                    title = "KICK → auto-rejoining",
+                    description = string.format("Account: **%s**\nReason: `%s`\nRejoin #%d",
+                        lp.Name, why, _G.farmRejoinCount),
+                    color = 15548997,  -- red
+                }},
+            })
+            pcall(fn, {Url=url, Method="POST", Headers={["Content-Type"]="application/json"}, Body=body})
+        end
         local function tryRejoin(why)
             _G.farmLastKickReason = why
             _G.farmRejoinCount = _G.farmRejoinCount + 1
             print(("[farm/rejoin] triggered: %s (count=%d)"):format(why, _G.farmRejoinCount))
             dsync("lastKickReason", why)
             dsync("rejoinCount", _G.farmRejoinCount)
-            pcall(function()
-                TeleportService:Teleport(game.PlaceId, lp)
-            end)
+            pcall(notifyKickOnDiscord, why)
+            pcall(function() TeleportService:Teleport(game.PlaceId, lp) end)
         end
-        -- Fast UI poll
+        -- Fast UI poll (v0.48: 'Invalid position' code 267 explicit)
         while running do
-            -- 1) GuiService error code (set by engine when kicked)
             local ok, code = pcall(function() return GuiService:GetErrorCode() end)
             if ok and code and code ~= Enum.ConnectionError.OK then
                 tryRejoin("GuiService code=" .. tostring(code))
-                task.wait(10)  -- avoid spam while rejoin processes
+                task.wait(10)
+                continue
             end
-            -- 2) CoreGui ErrorPrompt visible (Roblox disconnect UI)
             local errP = CoreGui:FindFirstChild("RobloxPromptGui", true)
                      or CoreGui:FindFirstChild("ErrorPromptApp", true)
             if errP then
                 for _, d in ipairs(errP:GetDescendants()) do
                     if d:IsA("TextLabel") and d.Text and
-                       (d.Text:find("Invalid") or d.Text:find("disconnected") or d.Text:find("Desconectad") or d.Text:find("expulsa"))
+                       (d.Text:find("Invalid position") or d.Text:find("Invalid")
+                        or d.Text:find("267") or d.Text:find("disconnected")
+                        or d.Text:find("Desconectad") or d.Text:find("expulsa")
+                        or d.Text:find("expulsar"))
                     then
-                        tryRejoin("prompt=" .. d.Text:sub(1, 40))
+                        tryRejoin("prompt=" .. d.Text:sub(1, 60))
                         task.wait(10)
                         break
                     end
@@ -655,6 +683,15 @@ if CONFIG.AUTO_REJOIN then
             end
             task.wait(CONFIG.REJOIN_POLL_INTERVAL)
         end
+    end)
+
+    -- v0.48: also hook PlayerRemoving as a last-ditch detection
+    pcall(function()
+        Players.PlayerRemoving:Connect(function(removedPlayer)
+            if removedPlayer == lp then
+                pcall(function() game:GetService("TeleportService"):Teleport(game.PlaceId, lp) end)
+            end
+        end)
     end)
 end
 
