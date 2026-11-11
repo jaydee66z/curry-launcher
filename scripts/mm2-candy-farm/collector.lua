@@ -625,6 +625,10 @@ if CONFIG.STALL_WATCHDOG then
             else
                 local idle = os.clock() - lastChangeAt
                 if idle > CONFIG.STALL_NO_PICKUP_WINDOW then
+                    _G.farmRejoinCount = (_G.farmRejoinCount or 0) + 1
+                    _G.farmLastKickReason = "stall-no-pickup"
+                    dsync("rejoinCount", _G.farmRejoinCount)
+                    dsync("lastKickReason", "stall-no-pickup")
                     print(("[farm/stall] %ds farming without pickup -> teleporting to new server"):format(math.floor(idle)))
                     pcall(function() TeleportService:Teleport(game.PlaceId, lp) end)
                     task.wait(15)
@@ -1312,8 +1316,12 @@ farmConn = RNS.Heartbeat:Connect(function(dt)
                 _G.farmVoidSince = _G.farmVoidSince or os.clock()
                 local stuck = os.clock() - _G.farmVoidSince
                 if stuck > CONFIG.FLOOR_RESCUE_TIMEOUT then
-                    print(("[farm/void] stuck %ds -> teleport new server"):format(math.floor(stuck)))
                     _G.farmVoidSince = nil
+                    _G.farmRejoinCount = (_G.farmRejoinCount or 0) + 1
+                    _G.farmLastKickReason = "floor-guard-timeout"
+                    dsync("rejoinCount", _G.farmRejoinCount)
+                    dsync("lastKickReason", "floor-guard-timeout")
+                    print(("[farm/void] stuck %ds -> teleport new server"):format(math.floor(stuck)))
                     pcall(function() game:GetService("TeleportService"):Teleport(game.PlaceId, lp) end)
                     return
                 end
