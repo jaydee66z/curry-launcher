@@ -1,6 +1,19 @@
 --[[
-    MM2 CANDY FARM — v0.8 (Curry Launcher)
+    MM2 CANDY FARM — v0.9 (Curry Launcher)
     ======================================
+    v0.9 NOCLIP FIX: live probe found HumanoidRootPart, UpperTorso,
+    LowerTorso holding CanCollide=true despite the per-frame noclip
+    sweep. Root cause: the sweep ran on Heartbeat (AFTER the physics
+    step), so our CanCollide=false write took effect only for the
+    NEXT frame's physics — the current frame already collided using
+    the server-restored CanCollide=true. The bot wedged in glass
+    cases and corners.
+    - Noclip now runs on RunService.Stepped (BEFORE physics).
+    - Iterates char:GetDescendants() live each frame instead of a
+      stale cache (covers newly-added parts like tools).
+    - Explicit forEach of HRP+torsos first (most important).
+    - Heartbeat sweep kept as belt-and-braces.
+
     v0.8 ANTI-STUCK: v0.7 fixed the server kicks but the bot still
     looped on unreachable candies (ceiling, inside geometry, hitbox
     mismatch). It would park, time out, defer for RETRY_AFTER, and
@@ -314,10 +327,31 @@ end)
 -- ───────────────────────────────────────────────
 -- Character / noclip
 -- ───────────────────────────────────────────────
-local noclipConn
+local noclipStepConn
+local noclipAddConn
 local function restoreCollision()
-    for _, p in ipairs(charParts) do
-        if p and p.Parent then p.CanCollide = true end
+    local char = lp.Character
+    if not char then return end
+    for _, p in ipairs(char:GetDescendants()) do
+        if p:IsA("BasePart") then p.CanCollide = true end
+    end
+end
+
+-- v0.9: runs BEFORE physics every frame. Hits HRP + torsos explicitly
+-- (the parts the server keeps restoring) then the rest via GetDescendants
+-- so newly-added bodyparts/tools are caught without a stale cache.
+local function noclipStep()
+    if not running then return end
+    if not wasFarming then return end  -- only noclip while actively farming
+    local char = lp.Character
+    if not char then return end
+    local hrp = char:FindFirstChild("HumanoidRootPart")
+    if hrp then hrp.CanCollide = false end
+    local lt = char:FindFirstChild("LowerTorso"); if lt then lt.CanCollide = false end
+    local ut = char:FindFirstChild("UpperTorso"); if ut then ut.CanCollide = false end
+    local t  = char:FindFirstChild("Torso");      if t  then t.CanCollide  = false end
+    for _, p in ipairs(char:GetDescendants()) do
+        if p:IsA("BasePart") and p.CanCollide then p.CanCollide = false end
     end
 end
 
@@ -332,14 +366,19 @@ local function onCharacter(char)
     parkedCoin   = nil
     parkedUntil  = 0
     wasFarming   = false
-    if noclipConn then noclipConn:Disconnect() end
-    noclipConn = char.DescendantAdded:Connect(function(d)
+    if noclipAddConn then noclipAddConn:Disconnect() end
+    noclipAddConn = char.DescendantAdded:Connect(function(d)
         if d:IsA("BasePart") then
             table.insert(charParts, d)
             task.defer(function() if d.Parent then d.CanCollide = false end end)
         end
     end)
 end
+
+-- v0.9: single global Stepped connection (survives respawns since it
+-- re-reads lp.Character each frame). Disconnected only on running=false.
+if noclipStepConn then noclipStepConn:Disconnect() end
+noclipStepConn = RNS.Stepped:Connect(noclipStep)
 
 if lp.Character then onCharacter(lp.Character) end
 lp.CharacterAdded:Connect(onCharacter)
@@ -539,7 +578,8 @@ local farmConn
 farmConn = RNS.Heartbeat:Connect(function(dt)
     if not running then
         farmConn:Disconnect()
-        if noclipConn then noclipConn:Disconnect() end
+        if noclipAddConn then noclipAddConn:Disconnect() end
+        if noclipStepConn then noclipStepConn:Disconnect() end
         return
     end
 
