@@ -156,6 +156,10 @@ local CONFIG = {
     AUTO_BUY_BOX            = true,
     BOX_BUY_THRESHOLD       = 600,
     BOX_NAME                = "Halloween2026Box",
+
+    -- v0.24: auto-rejoin on kick / disconnect prompt
+    AUTO_REJOIN             = true,
+    REJOIN_POLL_INTERVAL    = 1.0,
     SHERIFF_SHOOT_RANGE     = 60,
     TIME_BETWEEN_SHOTS      = 3.4,
     STAB_RANGE              = 12,
@@ -424,6 +428,56 @@ cacheWaitingLabel()
 
 if noclipStepConn then noclipStepConn:Disconnect() end
 noclipStepConn = RNS.Stepped:Connect(noclipStep)
+
+-- ───────────────────────────────────────────────
+-- v0.24: auto-rejoin watchdog (parallel task)
+-- Detects CoreGui ErrorPrompt or GuiService:GetErrorCode and fires
+-- TeleportService:Teleport back into a new instance. Also watches
+-- for the disconnected overlay in PlayerGui.
+-- ───────────────────────────────────────────────
+_G.farmRejoinCount = _G.farmRejoinCount or 0
+_G.farmLastKickReason = _G.farmLastKickReason or nil
+if CONFIG.AUTO_REJOIN then
+    task.spawn(function()
+        local TeleportService = game:GetService("TeleportService")
+        local GuiService = game:GetService("GuiService")
+        local CoreGui = game:GetService("CoreGui")
+        local function tryRejoin(why)
+            _G.farmLastKickReason = why
+            _G.farmRejoinCount = _G.farmRejoinCount + 1
+            print(("[farm/rejoin] triggered: %s (count=%d)"):format(why, _G.farmRejoinCount))
+            dsync("lastKickReason", why)
+            dsync("rejoinCount", _G.farmRejoinCount)
+            pcall(function()
+                TeleportService:Teleport(game.PlaceId, lp)
+            end)
+        end
+        -- Fast UI poll
+        while running do
+            -- 1) GuiService error code (set by engine when kicked)
+            local ok, code = pcall(function() return GuiService:GetErrorCode() end)
+            if ok and code and code ~= Enum.ConnectionError.OK then
+                tryRejoin("GuiService code=" .. tostring(code))
+                task.wait(10)  -- avoid spam while rejoin processes
+            end
+            -- 2) CoreGui ErrorPrompt visible (Roblox disconnect UI)
+            local errP = CoreGui:FindFirstChild("RobloxPromptGui", true)
+                     or CoreGui:FindFirstChild("ErrorPromptApp", true)
+            if errP then
+                for _, d in ipairs(errP:GetDescendants()) do
+                    if d:IsA("TextLabel") and d.Text and
+                       (d.Text:find("Invalid") or d.Text:find("disconnected") or d.Text:find("Desconectad") or d.Text:find("expulsa"))
+                    then
+                        tryRejoin("prompt=" .. d.Text:sub(1, 40))
+                        task.wait(10)
+                        break
+                    end
+                end
+            end
+            task.wait(CONFIG.REJOIN_POLL_INTERVAL)
+        end
+    end)
+end
 
 -- ───────────────────────────────────────────────
 -- v0.21: Halloween Box auto-opener (parallel task)
