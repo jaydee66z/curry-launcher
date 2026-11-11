@@ -1,6 +1,24 @@
 --[[
-    MM2 CANDY FARM — v0.14 (Curry Launcher)
+    MM2 CANDY FARM — v0.15 (Curry Launcher)
     =======================================
+    v0.15 HUMANIZED MOVEMENT (operator feedback — AC kick from
+    inconsistent motion):
+    - FORCE_WALKSPEED=26 on the Humanoid so the server's speed
+      validator sees exactly what our CFrame cadence produces
+      (SPEED * dt per frame). Mismatch between the Humanoid's
+      declared speed and our actual position delta is a classic
+      "Invalid position" trigger.
+    - MAX_FRAME_STEP tightened 1.1 -> 0.5 (~SPEED/60) for smoother
+      visual flow and more granular position updates to the server.
+    - Direction smoothing: smoothDir := lerp(smoothDir, newDir,
+      DIR_SMOOTH=0.25) so pivots between coins ease in instead of
+      snapping — looks less botty.
+    - CFrame.lookAt in safeMove orients HRP toward the move
+      direction (character actually faces where it's going).
+    - AssemblyLinearVelocity synced to the position delta so the
+      server's physics replicator sees matching velocity.
+    - stopFarm restores WalkSpeed=16 so lobby feels normal.
+
     v0.14 PICKUP BREAKTHROUGH:
     - Reverse-engineered MM2's pickup remote: ReplicatedStorage.Remotes
       .Gameplay.GetCoin. Signature: GetCoin:FireServer(coinServerPart).
@@ -81,15 +99,19 @@ local CONFIG = {
     STAB_RANGE              = 12,
     TIME_BETWEEN_STABS      = 1.5,
 
-    -- Movement (v0.14: SPEED=26, torso-at-coin, legal pickup)
+    -- Movement (v0.15: humanized, SPEED=26 synced to humanoid)
     SPEED                   = 26,
-    MAX_FRAME_STEP          = 1.1,
+    FORCE_WALKSPEED         = 26,      -- v0.15: hum.WalkSpeed locked at this
+    MAX_FRAME_STEP          = 0.5,     -- v0.15: ~SPEED/60, smoother
     MAX_DT                  = 0.05,
     MAX_JUMP                = 25,
-    TIME_ON_COIN            = 1.0,     -- v0.14: longer park for server poll
+    DIR_SMOOTH              = 0.25,    -- v0.15: heading lerp factor per frame
+    SYNC_VELOCITY           = true,    -- v0.15: write AssemblyLinearVelocity
+    FACE_MOVE_DIR           = true,    -- v0.15: CFrame.lookAt orientation
+    TIME_ON_COIN            = 1.0,
     RETRY_AFTER             = 0.4,
-    MAX_ATTEMPTS            = 4,       -- v0.14: 4 tries before burying
-    STUCK_TIMEOUT           = 5.0,     -- v0.14: generous
+    MAX_ATTEMPTS            = 4,
+    STUCK_TIMEOUT           = 5.0,
     START_DELAY             = 2,
     MAP_MARGIN              = 20,
 
@@ -147,8 +169,11 @@ local CoinCollected = Gameplay:WaitForChild("CoinCollected")
 local CoinsStarted  = Gameplay:WaitForChild("CoinsStarted")
 local GetCoin       = Gameplay:WaitForChild("GetCoin")  -- v0.14 direct pickup remote
 
-local firedAt       = setmetatable({}, {__mode = "k"})  -- coin -> last fire os.clock
+local firedAt       = setmetatable({}, {__mode = "k"})
 local firesForCoin  = setmetatable({}, {__mode = "k"})
+
+-- v0.15: smoothed heading (lerp'd move direction) for humanized motion
+local smoothDir     = Vector3.new(0, 0, 1)
 
 _G.farmDebug = _G.farmDebug or {}
 local DBG = _G.farmDebug
@@ -161,13 +186,25 @@ local function dlog(msg)
 end
 local function dsync(k, v) if CONFIG.DEBUG_EXPOSE then DBG[k] = v end end
 
--- Guarded CFrame writer: never teleport farther than MAX_JUMP in one step.
-local function safeMove(hrp, targetPos)
+-- v0.15 humanized CFrame writer:
+-- - rejects jumps > MAX_JUMP (AC anti-teleport)
+-- - preserves orientation via CFrame.lookAt in the move direction (flattened)
+-- - writes AssemblyLinearVelocity consistent with position delta so the
+--   server's physics/replication model agrees (prevents "Invalid position")
+local function safeMove(hrp, targetPos, dt)
     local delta = targetPos - hrp.Position
     local jump = delta.Magnitude
     if jump > CONFIG.MAX_JUMP then return false end
-    if jump < 0.01 then return true end
-    hrp.CFrame = CFrame.new(targetPos)
+    if jump < 0.001 then return true end
+    local flat = Vector3.new(delta.X, 0, delta.Z)
+    if CONFIG.FACE_MOVE_DIR and flat.Magnitude > 0.01 then
+        hrp.CFrame = CFrame.lookAt(targetPos, targetPos + flat.Unit)
+    else
+        hrp.CFrame = CFrame.new(targetPos) * (hrp.CFrame - hrp.CFrame.Position)
+    end
+    if CONFIG.SYNC_VELOCITY and dt and dt > 0 then
+        hrp.AssemblyLinearVelocity = Vector3.new(delta.X/dt, 0, delta.Z/dt)
+    end
     return true
 end
 
@@ -438,6 +475,7 @@ end
 local function stopFarm(char, hrp, hum)
     if not char or not hrp or not hum then return end
     hum.PlatformStand = false
+    hum.WalkSpeed = 16  -- restore default so lobby/menu feels normal
     local bv = hrp:FindFirstChild("FarmBV"); if bv then bv:Destroy() end
     for _, p in ipairs(char:GetDescendants()) do
         if p:IsA("BasePart") then p.CanCollide = true end
@@ -477,12 +515,19 @@ farmConn = RNS.Heartbeat:Connect(function(dt)
         wasFarming = true
         myRole     = getMyRole()
         refreshHeadOffset(char)
+        smoothDir  = Vector3.new(hrp.CFrame.LookVector.X, 0, hrp.CFrame.LookVector.Z)
+        if smoothDir.Magnitude < 0.01 then smoothDir = Vector3.new(0,0,1) else smoothDir = smoothDir.Unit end
         dlog(("ENGAGE: role=%s head=%.2f speed=%d"):format(myRole, headOffset, CONFIG.SPEED))
         dsync("myRole", myRole)
         dsync("wasFarming", true)
         dsync("headOffset", headOffset)
     end
 
+    -- v0.15: force WalkSpeed to the configured value so the server's
+    -- speed-validation reference matches our actual CFrame cadence.
+    if hum.WalkSpeed ~= CONFIG.FORCE_WALKSPEED then
+        hum.WalkSpeed = CONFIG.FORCE_WALKSPEED
+    end
     hum.PlatformStand = true
     local bv       = hrp:FindFirstChild("FarmBV") or setupHover(hrp)
     local myPos    = hrp.Position
@@ -681,15 +726,21 @@ farmConn = RNS.Heartbeat:Connect(function(dt)
         end
     end
 
-    -- Step toward coin center. If the remaining distance fits in one
-    -- step, go the whole way instead of clipping — lands us exactly on
-    -- the coin and starts the park cycle next frame.
+    -- v0.15 HUMANIZED STEP: smooth heading via lerp toward target
+    -- direction so sharp coin-to-coin pivots feel natural (not a
+    -- teleport flick). Step size still SPEED*dt capped so the
+    -- humanoid's own WalkSpeed validation on the server matches.
     local diff = target - myPos
     local remaining = diff.Magnitude
+    local rawDir = remaining > 0.01 and diff.Unit or smoothDir
+    -- Lerp smoothDir toward rawDir
+    smoothDir = (smoothDir:Lerp(rawDir, CONFIG.DIR_SMOOTH))
+    if smoothDir.Magnitude < 0.01 then smoothDir = rawDir end
+    smoothDir = smoothDir.Unit
     local stepCap = math.min(CONFIG.MAX_FRAME_STEP, CONFIG.SPEED * dt)
     local step = math.min(remaining, stepCap)
-    local nextPos = myPos + diff.Unit * step
-    local ok = safeMove(hrp, nextPos)
+    local nextPos = myPos + smoothDir * step
+    local ok = safeMove(hrp, nextPos, dt)
     if not ok then
         deferredUntil[coin] = os.clock() + CONFIG.RETRY_AFTER
         tripTarget = nil
