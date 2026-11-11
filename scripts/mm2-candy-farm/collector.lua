@@ -341,10 +341,13 @@ local CONFIG = {
     RESCUE_IF_NO_COIN_WITHIN = 200,       -- if nearest > this -> rescue
     CLUSTER_PREFERENCE      = true,
 
-    -- v0.38: walkable-grid filter (requires map_recon.lua to have
-    -- populated _G.farmMaps[currentMap] — see docs/obsidian/mm2-pathfinder.md)
+    -- v0.39: walkable-grid filter (soft) — scores coins by walkable
+    -- proximity but NEVER hard-rejects. If no cell nearby, bot still
+    -- chases via bbox fallback. Hard rejection in v0.38 was killing
+    -- every candy on partially-scanned maps.
     USE_WALKABLE_GRID       = true,
-    WALKABLE_SEARCH_RADIUS  = 12,         -- max studs from coin to nearest walkable cell
+    WALKABLE_SEARCH_RADIUS  = 25,        -- bumped 12 -> 25 (looser)
+    WALKABLE_HARD_FILTER    = false,     -- v0.39: soft mode
     MAX_DT                  = 0.05,
     MAX_JUMP                = 25,
     DIR_SMOOTH              = 0.25,    -- v0.15: heading lerp factor per frame
@@ -1060,14 +1063,21 @@ local function getBestCoin(myPos, mySpeed)
                 end
                 -- v0.19: no hard filters, pure scoring. Softer wall penalty
                 -- plus a near-preference bonus. Hard distance cap only.
-                -- v0.38: also require the coin be near a walkable cell
-                -- from the pathfinder grid (if we have one for this map).
-                local walkOK = true
+                -- v0.39: walkable-grid now SOFT (scoring only, no reject)
+                -- unless WALKABLE_HARD_FILTER=true explicitly.
+                local walkableBonus = 0
                 if CONFIG.USE_WALKABLE_GRID then
-                    walkOK = nearestWalkableCell(pos) ~= nil
+                    local cell = nearestWalkableCell(pos)
+                    if cell == nil then
+                        if CONFIG.WALKABLE_HARD_FILTER then
+                            goto skip_coin
+                        else
+                            walkableBonus = 8  -- small penalty
+                        end
+                    end
                 end
-                if baseDist <= CONFIG.MAX_PICK_DISTANCE and walkOK then
-                    local score = baseDist + walls * CONFIG.WALL_PENALTY
+                if baseDist <= CONFIG.MAX_PICK_DISTANCE then
+                    local score = baseDist + walls * CONFIG.WALL_PENALTY + walkableBonus
                     if baseDist < CONFIG.NEAR_PREFERENCE_RADIUS then
                         score = score - (CONFIG.NEAR_PREFERENCE_RADIUS - baseDist) * 0.5
                     end
@@ -1075,6 +1085,7 @@ local function getBestCoin(myPos, mySpeed)
                         if score < bestScore then best, bestScore = serverPart, score end
                     end
                 end
+                ::skip_coin::
             end
         end
     end
