@@ -75,7 +75,8 @@ class Session:
 
 class MassRunner:
     def __init__(self, credentials, *, place_id=None, vip_link=None, attempts=3, duration=None, emit=print,
-                 process_factory=None, emit_batch=None, brainrot=False, only_best=False):
+                 process_factory=None, emit_batch=None, brainrot=False, only_best=False,
+                 mm2=False, mm2_dry_run=False):
         if only_best and (not brainrot or vip_link is not None):
             raise ValueError('Only-best hopping requires --brainrot and public servers.')
         if vip_link is not None:
@@ -103,6 +104,8 @@ class MassRunner:
         from .brainrot import Output
         self.brainrot_output = Output(only_best=only_best) if brainrot else None
         self.only_best = only_best
+        self.mm2 = mm2
+        self.mm2_dry_run = mm2_dry_run
         self.coordinator = None
 
     def _show(self, index, event):
@@ -156,6 +159,10 @@ class MassRunner:
             argv += ['--brainrot']
         if self.only_best:
             argv += ['--only-best']
+        if getattr(self, 'mm2', False):
+            argv += ['--mm2']
+        if getattr(self, 'mm2_dry_run', False):
+            argv += ['--mm2-dry-run']
         process = self.process_factory(argv, cwd=Path(__file__).resolve().parents[1],
             stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
             text=True, encoding='utf-8', creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0))

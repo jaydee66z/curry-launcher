@@ -97,6 +97,87 @@ def scan_servers(args, bootstrap, account):
     return 0
 
 
+def run_mm2_farm(args, bootstrap, account):
+    """MM2 pure-Python farm: join MM2, run mm2_client.Session loop.
+
+    - ``--mm2-dry-run`` logs payloads without sending (zero AC risk).
+    - Default duration = 3600s per round of bootstrap.prepare() to reduce
+      join frequency.
+    """
+    from .mm2_client import Session
+    from .mm2_inventory import EmbersickleWatcher
+    place_id = args.place_id or 142823291  # MM2
+    info = bootstrap.prepare(place_id, attempts=args.attempts)
+    if info.account.user_id != account.user_id:
+        raise ValueError('Account identity changed during startup.')
+    emit('connection_info_ready', user_id=account.user_id, place_id=info.place_id,
+         server_kind='public', farm_mode='mm2')
+    with Console(sys.stdin) as console:
+        client = GameClient(info, commands=console.commands,
+            on_player=lambda player: emit('player', player=player),
+            on_character=lambda character: emit('character', **character))
+        # Give the client time to join + replicate enough world to pick
+        # out Coin_Server nodes and ProfileData. The farm loop only
+        # begins after inspector.own is set.
+        inspector = getattr(client, 'inspector', None)
+        if inspector is None:
+            emit('error', message='GameClient has no inspector (schema missing).')
+            return 1
+        transport = getattr(client, 'transport', None)
+        if transport is None:
+            emit('error', message='GameClient has no transport.')
+            return 1
+        session = Session(inspector=inspector, transport=transport,
+                          emit=lambda e: emit('mm2', **e))
+        # Hook CoinCollected via inspector's event sink. inspector.event_value
+        # is called for every RemoteEvent OnClientEvent; we filter inside.
+        _orig_ev = inspector.event_value
+        def _wrapped_event(name, key, arguments):
+            try:
+                if name == 'RemoteEvent.OnClientEvent':
+                    # CoinCollected arg[0] = coin type bytes
+                    if arguments and isinstance(arguments[0], (bytes, str)):
+                        kind = arguments[0] if isinstance(arguments[0], bytes) else arguments[0].encode('utf-8', 'ignore')
+                        if kind in (b'Candy', b'Coin', b'Candy2026'):
+                            session.on_coin_collected(kind)
+                    elif not arguments:
+                        # Maybe CoinsStarted
+                        session.on_coins_started()
+            finally:
+                _orig_ev(name, key, arguments)
+        inspector.event_value = _wrapped_event
+        # Fire up the Embersickle watcher (daemon thread)
+        watcher = EmbersickleWatcher(inspector, username=account.username or '',
+                                     user_id=account.user_id,
+                                     emit=lambda e: emit('mm2_inv', **e))
+        watcher.start()
+        try:
+            # Run GameClient in a background thread so Session.run can also tick
+            import threading
+            def _client_runner():
+                try:
+                    client.run(duration=args.duration)
+                except Exception as e:
+                    emit('client_err', msg=repr(e)[:160])
+            t = threading.Thread(target=_client_runner, daemon=True)
+            t.start()
+            # Wait for inspector.own to be populated (character joined)
+            for _ in range(600):  # up to 60s
+                if inspector.own is not None:
+                    break
+                time.sleep(0.1)
+            if inspector.own is None:
+                emit('error', message='Timed out waiting for inspector.own (join failed).')
+                return 1
+            session.run(duration=args.duration, dry_run=bool(getattr(args, 'mm2_dry_run', False)))
+        finally:
+            watcher.stop()
+    emit('finished', result={'state': 'mm2_stopped',
+                             'lifetime_candies': session.lifetime_candies,
+                             'boxes_opened': session.boxes_opened})
+    return 0
+
+
 def run(args):
     initial = sys.stdin.readline(24000)
     if len(initial) >= 24000 or not initial.endswith('\n'):
@@ -105,14 +186,27 @@ def run(args):
     credential = Credential(payload['cookie'])
     vip_link = payload.get('vip_link')
     del payload, initial
-    bootstrap = RobloxBootstrap(credential)
+    # v0.45: optional per-account proxy from rakbot.proxy_pool.
+    # ProxyPool.enabled() returns False silently if no proxies.txt.
+    proxy_pool = None
+    try:
+        from .proxy_pool import ProxyPool
+        pp = ProxyPool()
+        if pp.enabled():
+            proxy_pool = pp
+    except Exception:
+        proxy_pool = None  # non-fatal; direct connection still works
+    bootstrap = RobloxBootstrap(credential, proxy_pool=proxy_pool)
     account = bootstrap.authenticate()
-    emit('authenticated', user_id=account.user_id)
+    emit('authenticated', user_id=account.user_id,
+         proxy_pool=bool(proxy_pool))
     # Parent checks duplicate account IDs before allowing GameJoin.
     if sys.stdin.readline(128).strip() != '__start__':
         return 0
     if getattr(args, 'only_best', False):
         return scan_servers(args, bootstrap, account)
+    if getattr(args, 'mm2', False):
+        return run_mm2_farm(args, bootstrap, account)
     info = (bootstrap.prepare_vip(vip_link, attempts=args.attempts) if vip_link is not None
             else bootstrap.prepare(args.place_id, attempts=args.attempts))
     if info.account.user_id != account.user_id:
@@ -144,6 +238,10 @@ def main():
     parser.add_argument('--duration', type=float)
     parser.add_argument('--brainrot', action='store_true')
     parser.add_argument('--only-best', action='store_true')
+    parser.add_argument('--mm2', action='store_true',
+                        help='Run the MM2 Python farm (GetCoin + box opener).')
+    parser.add_argument('--mm2-dry-run', action='store_true',
+                        help='Log payloads instead of sending (zero AC risk).')
     args = parser.parse_args()
     try:
         return run(args)
