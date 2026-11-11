@@ -1,6 +1,17 @@
 --[[
-    MM2 CANDY FARM — v0.27 (Curry Launcher)
+    MM2 CANDY FARM — v0.28 (Curry Launcher)
     =======================================
+    v0.28 DISCORD WEBHOOK ON RARE DROP (operator asks for Embersickle
+    notify, common + chroma variants).
+    - CONFIG.WEBHOOK_URL: paste your Discord webhook (or set env-style
+      before running). CONFIG.NOTIFY_ITEMS = {"embersickle"} by default.
+    - Match is case-insensitive substring over the item string returned
+      by OpenCrate. If the match string also contains "chroma", variant
+      flagged as chroma (gold embed), otherwise common (orange embed).
+    - Payload: Account username + UserId, item name, variant.
+    - Transport: executor-agnostic http_request / request / syn.request
+      / fluxus.request / http.request (first one that exists wins).
+
     v0.27 BOX RESULT LOGGING:
     - OpenCrate:InvokeServer return value now captured (pcall with
       return) and described through describeBoxResult() — handles
@@ -187,6 +198,13 @@ local CONFIG = {
     AUTO_BUY_BOX            = true,
     BOX_BUY_THRESHOLD       = 600,
     BOX_NAME                = "Halloween2026Box",
+
+    -- v0.28: Discord webhook — notify on rare drops
+    WEBHOOK_ENABLED         = true,
+    WEBHOOK_URL             = "PASTE_YOUR_DISCORD_WEBHOOK_HERE",
+    NOTIFY_ITEMS            = {           -- lowercase substrings to match
+        "embersickle",
+    },
 
     -- v0.24: auto-rejoin on kick / disconnect prompt
     AUTO_REJOIN             = true,
@@ -544,6 +562,59 @@ end
 _G.farmBoxesOpened = _G.farmBoxesOpened or 0
 _G.farmBoxHistory  = _G.farmBoxHistory or {}  -- list of {t, item, before, after}
 
+-- v0.28: executor-agnostic HTTP POST. Tries the common exported
+-- names (http_request / request / syn.request / fluxus.request).
+local function execHttp(payload)
+    local fn = (http_request) or (request) or (syn and syn.request) or (fluxus and fluxus.request) or (http and http.request)
+    if not fn then return nil, "no http function" end
+    local ok, resp = pcall(fn, payload)
+    if not ok then return nil, tostring(resp) end
+    return resp
+end
+
+local function discordNotify(itemName, variant)
+    if not CONFIG.WEBHOOK_ENABLED then return end
+    local url = CONFIG.WEBHOOK_URL or ""
+    if url == "" or url:find("PASTE_YOUR") then
+        warn("[farm/webhook] WEBHOOK_URL not set; skipping")
+        return
+    end
+    local user  = lp.Name
+    local uid   = lp.UserId
+    local color = (variant == "chroma") and 15844367 or 11027200  -- gold vs orange
+    local body = string.format(
+        '{"username":"MM2 Farm","embeds":[{"title":"%s DROP","description":"Account: **%s** (UserId %d)\\nItem: **%s**\\nVariant: **%s**","color":%d}]}',
+        itemName:upper(), user, uid, itemName, variant, color
+    )
+    local resp, err = execHttp({
+        Url = url, Method = "POST",
+        Headers = {["Content-Type"] = "application/json"},
+        Body = body,
+    })
+    if resp then
+        print(("[farm/webhook] notified %s (%s) → %s"):format(itemName, variant, tostring(resp.StatusCode or resp.Status or "?")))
+    else
+        warn(("[farm/webhook] POST failed: %s"):format(tostring(err)))
+    end
+end
+
+-- v0.28: rare-drop watcher — scans the box result/item string for
+-- any substring from CONFIG.NOTIFY_ITEMS (case-insensitive), decides
+-- variant by looking for "chroma" in the match, fires discordNotify.
+local function checkRareDrop(itemStr)
+    if not itemStr or itemStr == "" then return end
+    local lower = itemStr:lower()
+    for _, needle in ipairs(CONFIG.NOTIFY_ITEMS) do
+        if lower:find(needle, 1, true) then
+            local variant = lower:find("chroma", 1, true) and "chroma" or "common"
+            -- Extract a clean name (prefer the first "word" that includes needle)
+            local clean = itemStr
+            discordNotify(clean, variant)
+            break
+        end
+    end
+end
+
 local function describeBoxResult(result)
     if result == nil then return "nil" end
     local t = typeof(result)
@@ -602,6 +673,8 @@ if CONFIG.AUTO_BUY_BOX then
                     dsync("lastBoxItem", item)
                     print(("[box #%d] OPENED  item=%s  candies %d -> %d (-%d)"):format(
                         _G.farmBoxesOpened, item, before, after, spent))
+                    -- v0.28: rare drop check
+                    pcall(checkRareDrop, item)
                 else
                     local item = okInv and describeBoxResult(result) or "pcall_err"
                     print(("[box] buy FAILED (candies %d -> %d, result=%s)"):format(
