@@ -1061,22 +1061,21 @@ local function getBestCoin(myPos, mySpeed)
                 if CONFIG.WALL_RAYCAST then
                     walls = countWallsBetween(myPos, pos, char)
                 end
-                -- v0.19: no hard filters, pure scoring. Softer wall penalty
-                -- plus a near-preference bonus. Hard distance cap only.
-                -- v0.39: walkable-grid now SOFT (scoring only, no reject)
-                -- unless WALKABLE_HARD_FILTER=true explicitly.
+                -- v0.40: clean scoring, no goto. Walkable-grid is a soft
+                -- score bias only unless WALKABLE_HARD_FILTER=true.
                 local walkableBonus = 0
+                local skip = false
                 if CONFIG.USE_WALKABLE_GRID then
                     local cell = nearestWalkableCell(pos)
                     if cell == nil then
                         if CONFIG.WALKABLE_HARD_FILTER then
-                            goto skip_coin
+                            skip = true
                         else
-                            walkableBonus = 8  -- small penalty
+                            walkableBonus = 8
                         end
                     end
                 end
-                if baseDist <= CONFIG.MAX_PICK_DISTANCE then
+                if not skip and baseDist <= CONFIG.MAX_PICK_DISTANCE then
                     local score = baseDist + walls * CONFIG.WALL_PENALTY + walkableBonus
                     if baseDist < CONFIG.NEAR_PREFERENCE_RADIUS then
                         score = score - (CONFIG.NEAR_PREFERENCE_RADIUS - baseDist) * 0.5
@@ -1085,7 +1084,6 @@ local function getBestCoin(myPos, mySpeed)
                         if score < bestScore then best, bestScore = serverPart, score end
                     end
                 end
-                ::skip_coin::
             end
         end
     end
