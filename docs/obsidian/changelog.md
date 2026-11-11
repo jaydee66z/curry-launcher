@@ -11,6 +11,68 @@ All notable changes per session. Keep newest at top.
 - Añadido jump automático cuando el candy está >6 studs encima del HRP y tocamos suelo
 - Save/restore de `WalkSpeed`/`HipHeight`/`AutoRotate` entre farm y idle
 
+## 2026-11-10 — mm2-0.20 → mm2-0.37 (sesión larga)
+
+### v0.20 — out-of-map rescue + chase distance cap
+- `collector.lua`: `MAX_PICK_DISTANCE=120`, rescue si HRP fuera del bbox del mapa
+- fix: bot perseguía candy en borde del mapa y se salía
+
+### v0.21 — STOP_AT_50 + contador lifetime + auto-buy box
+- `STOP_AT_CANDIES=50`: al llegar al threshold el bot queda estático (como lobby)
+- `_G.farmLifetimeCandies` cuenta candies por sesión
+- auto-buy Halloween2026Box con `OpenCrate:InvokeServer` cada vez que `ProfileData.Materials.Owned.Candies2026 >= 600`
+- verificado en vivo: box abierta cleanly (899 → 299)
+
+### v0.22 — rescue above-map + center target
+- también rescate si Y > bbox_top + 3
+- rescue snap a bbox center (no al top) para evitar loop infinito
+
+### v0.23-0.26 — HUMANIZADO con animaciones
+- v0.23: `HUMANIZED=true`, `Humanoid:MoveTo` + anims reales, hover BV Y-only, snap final 2s
+- v0.24: auto-rejoin watchdog (`GuiService:GetErrorCode` + CoreGui prompt scanner → `TeleportService:Teleport`)
+- v0.25: noclip al mapa entero en `CoinsStarted` (CanCollide=false en todas las partes)
+- v0.26: sin snap final — humanoid camina los últimos 2 studs; park con MoveTo en lugar de CFrame-pin
+
+### v0.27-0.28 — box logging + webhook de Discord
+- v0.27: captura return del `OpenCrate:InvokeServer`, imprime item recibido, guarda `_G.farmBoxHistory`
+- v0.28: webhook de Discord si drop match `embersickle` (common/chroma); detecta variant por substring; transport executor-agnostic (`http_request`/`request`/`syn.request`/`fluxus.request`/`http.request`). **PENDIENTE**: hardcodear URL del webhook del operador
+
+### v0.29 — anti-void-fall al round start
+- Y descent cap -3 studs/sec (era -SPEED=-16); flooded candies tiraban al bot al void
+- floor raycast guard: si no hay piso en 15 studs, rise +SPEED
+- hover BV instanciado al instante de wasFarming (sin frame-gap de gravedad)
+
+### v0.30 — visual-only hide + stall watchdog
+- `hideMapVisual()`: `Transparency=1` + `CastShadow=false` en partes del mapa (colisión PRESERVADA para no caer)
+- stall watchdog: si no hay pickups por 60s farming → teleport a nueva sesión
+
+### v0.31-0.33 — telemetría + ajustes
+- hard snap to bbox center (eliminado en v0.34), telemetry de causa de rejoin
+
+### v0.34 — KILL rejoin loop
+- v0.31 hard-snap disparaba rejoin cada round start (raycast no veía piso mid-teleport)
+- soft floor guard solo: rise-via-BV si HRP < bbox_bottom - 50
+- STALL window 60 → 180s
+
+### v0.35 — static model + lobby visual hide
+- `HUMANIZED=false`: vuelve a CFrame-step, modelo estático
+- `FREEZE_ANIMATIONS=true`: stop todos los tracks cada frame
+- `hideLobbyVisual()`: tarea paralela cada 8s oculta lobby cuando no hay ronda
+
+### v0.36 — HARD static (demasiado rígido, revertido)
+- `SetStateEnabled(false)` para todos los estados → bloqueó físicas, bot no se movía
+
+### v0.37 — lighter static lock (ACTUAL)
+- quita SetStateEnabled lockdown
+- mantiene: `PlatformStand=true`, `WalkSpeed=0`, `JumpPower=0`, anims stopped cada frame
+- CFrame writes mueven HRP correctamente → **modelo estático + bot teleport-step a candies**
+
+### Bugs conocidos
+- **Mapa Farmhouse/zombies**: bbox Y tight → floor rescue triggers (necesita margen per-map)
+- **Webhook URL**: `PASTE_YOUR_DISCORD_WEBHOOK_HERE` placeholder — operador debe pegarlo
+
+### Próximo: pathfinder de mapas → ver [[mm2-pathfinder]]
+
 ## 2026-11-10 — mm2-0.9 (real noclip)
 
 - `collector.lua`: noclip movido de `Heartbeat` (post-física) a `RunService.Stepped` (pre-física) — ahora los `CanCollide=false` surten efecto en el mismo frame
