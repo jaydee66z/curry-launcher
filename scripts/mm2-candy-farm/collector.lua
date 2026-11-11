@@ -1,6 +1,21 @@
 --[[
-    MM2 CANDY FARM — v0.37 (Curry Launcher)
+    MM2 CANDY FARM — v0.38 (Curry Launcher)
     =======================================
+    v0.38 WALKABLE-GRID INTEGRATION (pathfinder phase 2):
+    Uses _G.farmMaps[currentMap].walkable (populated by the sibling
+    map_recon.lua) to reject candies whose XZ position doesn't have
+    a walkable cell within WALKABLE_SEARCH_RADIUS (12 studs).
+    - nearestWalkableCell(worldPos): O(n) scan of the grid; returns
+      the closest cell {x,y,z} or nil.
+    - In getBestCoin: coins with no nearby walkable cell are skipped
+      (keeps bot inside the real map geometry, not just bbox).
+    - In movement: if coin is at a Y way below the walkable floor
+      (phantom/void candy), target the walkable floor Y instead so
+      we don't dive into the void chasing it.
+    - If no map data is available for the current map (not yet
+      captured, or map_recon not loaded), falls back to v0.37
+      behavior (bbox check only). Safe to run alongside map_recon.
+
     v0.37 LIGHTER STATIC LOCK (v0.36 was too tight — bot wouldn't
     move between candies). Operator loves the static look but the
     SetStateEnabled lockdown also blocked physics updates needed
@@ -325,6 +340,11 @@ local CONFIG = {
     MAX_PICK_DISTANCE       = 120,        -- v0.20: never chase farther than this
     RESCUE_IF_NO_COIN_WITHIN = 200,       -- if nearest > this -> rescue
     CLUSTER_PREFERENCE      = true,
+
+    -- v0.38: walkable-grid filter (requires map_recon.lua to have
+    -- populated _G.farmMaps[currentMap] — see docs/obsidian/mm2-pathfinder.md)
+    USE_WALKABLE_GRID       = true,
+    WALKABLE_SEARCH_RADIUS  = 12,         -- max studs from coin to nearest walkable cell
     MAX_DT                  = 0.05,
     MAX_JUMP                = 25,
     DIR_SMOOTH              = 0.25,    -- v0.15: heading lerp factor per frame
@@ -986,6 +1006,31 @@ local function countWallsBetween(fromPos, toPos, charExclude)
     return walls
 end
 
+-- v0.38: walkable-grid lookup. Returns the nearest walkable cell's
+-- {x,y,z} within WALKABLE_SEARCH_RADIUS, or nil if none.
+-- _G.farmMaps is populated by map_recon.lua.
+local function nearestWalkableCell(worldPos)
+    if not CONFIG.USE_WALKABLE_GRID then return {y = worldPos.Y} end
+    if not coinContainer or not coinContainer.Parent then return {y = worldPos.Y} end
+    local mapName = coinContainer.Parent.Name
+    local mapData = _G.farmMaps and _G.farmMaps[mapName]
+    if not mapData or not mapData.walkable then
+        return {y = worldPos.Y}  -- no grid yet; accept the coin
+    end
+    local step = mapData.gridStep or 6
+    local radius = CONFIG.WALKABLE_SEARCH_RADIUS
+    local bestCell, bestD = nil, math.huge
+    for _, cell in ipairs(mapData.walkable) do
+        local dx = cell.x - worldPos.X
+        local dz = cell.z - worldPos.Z
+        local d  = math.sqrt(dx*dx + dz*dz)
+        if d < bestD and d <= radius then
+            bestCell, bestD = cell, d
+        end
+    end
+    return bestCell
+end
+
 -- v0.12: target Coin_Server (the Part with TouchInterest), iterate via
 -- its tagged CoinVisual child.
 local function getBestCoin(myPos, mySpeed)
@@ -1015,7 +1060,13 @@ local function getBestCoin(myPos, mySpeed)
                 end
                 -- v0.19: no hard filters, pure scoring. Softer wall penalty
                 -- plus a near-preference bonus. Hard distance cap only.
-                if baseDist <= CONFIG.MAX_PICK_DISTANCE then
+                -- v0.38: also require the coin be near a walkable cell
+                -- from the pathfinder grid (if we have one for this map).
+                local walkOK = true
+                if CONFIG.USE_WALKABLE_GRID then
+                    walkOK = nearestWalkableCell(pos) ~= nil
+                end
+                if baseDist <= CONFIG.MAX_PICK_DISTANCE and walkOK then
                     local score = baseDist + walls * CONFIG.WALL_PENALTY
                     if baseDist < CONFIG.NEAR_PREFERENCE_RADIUS then
                         score = score - (CONFIG.NEAR_PREFERENCE_RADIUS - baseDist) * 0.5
@@ -1349,8 +1400,27 @@ farmConn = RNS.Heartbeat:Connect(function(dt)
     -- v0.14: target HRP at coin.Position. Move until close, then fire
     -- GetCoin:FireServer(coin) — the server accepts it and sets
     -- Collected=true without needing Touched to fire.
+    -- v0.38: if we have a walkable cell near this coin, use its floor
+    -- Y so we stand on real geometry (not float at the coin's Y which
+    -- might be mid-air for shelf candies).
     local coinPos = coin.Position
     local target  = coinPos
+    if CONFIG.USE_WALKABLE_GRID then
+        local cell = nearestWalkableCell(coinPos)
+        if cell and cell.y then
+            -- Stand ON the walkable floor; if coin is above, we'll jump/rise
+            local walkY = cell.y + 2  -- hover 2 studs above floor
+            -- but still aim at coin.Y for pickup
+            target = Vector3.new(coinPos.X, coinPos.Y, coinPos.Z)
+            -- Only clamp if coin is way above the walkable floor (shelf)
+            if coinPos.Y > walkY + 8 then
+                -- shelf candy — stay at coin level
+            elseif coinPos.Y < walkY - 2 then
+                -- coin is below floor somehow; go to walkY to avoid void
+                target = Vector3.new(coinPos.X, walkY, coinPos.Z)
+            end
+        end
+    end
     local hrpToCoin = (coinPos - myPos).Magnitude
 
     -- Within fire radius: fire GetCoin remote
