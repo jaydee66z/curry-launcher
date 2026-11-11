@@ -208,26 +208,50 @@ class Session:
         return True
 
     def _maybe_open_box(self):
-        """Poll candies, invoke OpenCrate when ≥ BOX_THRESHOLD."""
+        """Poll candies, invoke OpenCrate when ≥ BOX_THRESHOLD.
+
+        v0.4: verify by polling candies post-send. Only increments
+        boxes_opened if candies actually dropped by BOX_THRESHOLD.
+        This catches 'ghost boxes' where OpenCrate returned false but
+        the counter kept going up.
+        """
         now = time.monotonic()
         if now < self.next_box_poll:
             return
         self.next_box_poll = now + BOX_POLL_INTERVAL
-        # Read ProfileData.Materials.Owned.Candies2026 from the world.
-        # We resolve it lazily via mm2_inventory to keep this module slim.
         from . import mm2_inventory
-        candies = mm2_inventory.read_candies(self.inspector)
-        if candies is None or candies < BOX_THRESHOLD:
+        candies_before = mm2_inventory.read_candies(self.inspector)
+        if candies_before is None or candies_before < BOX_THRESHOLD:
             return
         payload = mm2_wire.opencrate_payload(
             self.inspector, self.next_invocation_id)
         if payload is None:
             return
         self.next_invocation_id = min(self.next_invocation_id + 1, 2 ** 31 - 2)
-        if self._safe_send(payload):
+        if not self._safe_send(payload):
+            return
+        # Verify by polling candies for next ~3s. If the server actually
+        # consumed BOX_THRESHOLD worth of candies, confirm; else log the
+        # ghost-box event so the operator can diagnose.
+        candies_after = candies_before
+        for _ in range(6):
+            time.sleep(0.5)
+            c = mm2_inventory.read_candies(self.inspector)
+            if c is not None:
+                candies_after = c
+                if candies_before - candies_after >= BOX_THRESHOLD:
+                    break
+        if candies_before - candies_after >= BOX_THRESHOLD:
             self.boxes_opened += 1
-            self.emit({"event": "box_fired", "boxes_opened": self.boxes_opened,
-                       "candies_before": candies})
+            self.emit({"event": "box_confirmed",
+                       "boxes_opened": self.boxes_opened,
+                       "candies_before": candies_before,
+                       "candies_after": candies_after})
+        else:
+            self.emit({"event": "box_ghost",
+                       "candies_before": candies_before,
+                       "candies_after": candies_after,
+                       "diff": candies_before - candies_after})
 
     # ── CoinsStarted / CoinCollected integration ──
     def on_coins_started(self):
