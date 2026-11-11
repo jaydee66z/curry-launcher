@@ -1,6 +1,16 @@
 --[[
-    MM2 CANDY FARM — v0.26 (Curry Launcher)
+    MM2 CANDY FARM — v0.27 (Curry Launcher)
     =======================================
+    v0.27 BOX RESULT LOGGING:
+    - OpenCrate:InvokeServer return value now captured (pcall with
+      return) and described through describeBoxResult() — handles
+      string / number / Instance / table (MM2 drop table has
+      {ItemName=..., Rarity=...}).
+    - Each successful open prints: [box #N] OPENED item=X candies
+      before -> after (-spent).
+    - _G.farmBoxHistory keeps last 50 drops: {t, item, before,
+      after, idx}. _G.farmDebug.lastBoxItem mirrors the newest.
+
     v0.26 NO MINI-TELEPORT ON PICKUP (operator: "que se mueva hasta
     la direccion donde se miniteletransporta"):
     - SNAP_FINAL_DISTANCE = 0 (was 2.0). Humanoid walks ALL the way
@@ -527,9 +537,37 @@ if CONFIG.AUTO_REJOIN then
 end
 
 -- ───────────────────────────────────────────────
--- v0.21: Halloween Box auto-opener (parallel task)
+-- v0.27: Halloween Box auto-opener (parallel task)
+-- Captures the InvokeServer return value so we know what item
+-- dropped from each box, stores a history and prints it.
 -- ───────────────────────────────────────────────
 _G.farmBoxesOpened = _G.farmBoxesOpened or 0
+_G.farmBoxHistory  = _G.farmBoxHistory or {}  -- list of {t, item, before, after}
+
+local function describeBoxResult(result)
+    if result == nil then return "nil" end
+    local t = typeof(result)
+    if t == "string" or t == "number" or t == "boolean" then return tostring(result) end
+    if t == "Instance" then
+        return string.format("%s<%s>", result.ClassName, result.Name)
+    end
+    if t == "table" then
+        -- common MM2 shape: {ItemName=..., Rarity=..., ...}
+        if result.ItemName then
+            local rarity = result.Rarity and (" ["..tostring(result.Rarity).."]") or ""
+            return tostring(result.ItemName) .. rarity
+        end
+        -- else dump first few keys
+        local keys = {}
+        for k, v in pairs(result) do
+            table.insert(keys, string.format("%s=%s", tostring(k), tostring(v)))
+            if #keys >= 4 then break end
+        end
+        return "{" .. table.concat(keys, ", ") .. "}"
+    end
+    return t .. "(" .. tostring(result) .. ")"
+end
+
 if CONFIG.AUTO_BUY_BOX then
     task.spawn(function()
         local Shop = ReplicatedStorage:WaitForChild("Remotes"):WaitForChild("Shop")
@@ -548,15 +586,26 @@ if CONFIG.AUTO_BUY_BOX then
             dsync("profileCandies", c)
             if c >= CONFIG.BOX_BUY_THRESHOLD then
                 local before = c
-                pcall(function() OpenCrate:InvokeServer(CONFIG.BOX_NAME, "MysteryBox", "Candies2026") end)
+                local okInv, result = pcall(function()
+                    return OpenCrate:InvokeServer(CONFIG.BOX_NAME, "MysteryBox", "Candies2026")
+                end)
                 task.wait(0.4)
                 local after = getCandies()
-                if (before - after) >= CONFIG.BOX_BUY_THRESHOLD then
+                local spent = before - after
+                if spent >= CONFIG.BOX_BUY_THRESHOLD then
                     _G.farmBoxesOpened = _G.farmBoxesOpened + 1
+                    local item = okInv and describeBoxResult(result) or "pcall_err"
+                    local entry = {t=os.clock(), item=item, before=before, after=after, idx=_G.farmBoxesOpened}
+                    table.insert(_G.farmBoxHistory, entry)
+                    if #_G.farmBoxHistory > 50 then table.remove(_G.farmBoxHistory, 1) end
                     dsync("boxesOpened", _G.farmBoxesOpened)
-                    dlog(("box OPENED #%d (candies %d -> %d)"):format(_G.farmBoxesOpened, before, after))
+                    dsync("lastBoxItem", item)
+                    print(("[box #%d] OPENED  item=%s  candies %d -> %d (-%d)"):format(
+                        _G.farmBoxesOpened, item, before, after, spent))
                 else
-                    dlog(("box buy failed (candies %d -> %d)"):format(before, after))
+                    local item = okInv and describeBoxResult(result) or "pcall_err"
+                    print(("[box] buy FAILED (candies %d -> %d, result=%s)"):format(
+                        before, after, item))
                     task.wait(3)
                 end
             end
