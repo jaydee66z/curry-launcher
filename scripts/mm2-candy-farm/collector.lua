@@ -513,12 +513,14 @@ local function insideMap(pos)
     return true
 end
 
+-- v0.22: rescue to the middle of the map (Y at center, not top) so the
+-- aboveMap check doesn't re-trigger immediately on the rescue itself.
 local function mapCenterTop()
     if coinContainer == nil then return nil end
     local parent = coinContainer.Parent
     if parent and parent:IsA("Model") then
         local ok, cf, size = pcall(parent.GetBoundingBox, parent)
-        if ok then return cf.Position + Vector3.new(0, size.Y/2 + 5, 0) end
+        if ok then return cf.Position end
     end
     return nil
 end
@@ -706,13 +708,15 @@ farmConn = RNS.Heartbeat:Connect(function(dt)
             local ok, cf, size = pcall(parent.GetBoundingBox, parent)
             if ok then
                 local bottom = cf.Position.Y - size.Y/2
+                local top    = cf.Position.Y + size.Y/2
                 local halfX = size.X/2 + CONFIG.MAP_MARGIN
                 local halfZ = size.Z/2 + CONFIG.MAP_MARGIN
                 local dx = myPos.X - cf.Position.X
                 local dz = myPos.Z - cf.Position.Z
                 local belowMap = myPos.Y < bottom + CONFIG.BELOW_MAP_Y_DELTA
+                local aboveMap = myPos.Y > top + 3    -- v0.22: on-roof rescue
                 local outsideXZ = math.abs(dx) > halfX or math.abs(dz) > halfZ
-                if belowMap or outsideXZ then
+                if belowMap or aboveMap or outsideXZ then
                     local rescue = mapCenterTop()
                     if rescue then
                         hrp.CFrame = CFrame.new(rescue)
