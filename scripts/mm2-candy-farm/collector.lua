@@ -1,6 +1,27 @@
 --[[
-    MM2 CANDY FARM — v0.43 (Curry Launcher)
+    MM2 CANDY FARM — v0.44 (Curry Launcher)
     =======================================
+    v0.44 PERMANENT HOVER + ALWAYS-ON ANIM FREEZE (root-cause fix
+    for the recurring "falls through floor at round start" bug):
+
+    Problem: operator reported MANY times the bot falls when a round
+    begins (v0.29, v0.30, v0.31, v0.34, v0.43 all failed to fix
+    this). Root cause: the hover BV was only being created INSIDE
+    the heartbeat the first time wasFarming engaged. During START_DELAY
+    + countdown, the character had no vertical hold, humanoid gravity
+    pulled it down, and by the time the BV attached the character
+    was already below the map.
+
+    Fix (v0.44):
+    - onCharacter(): hover BV is attached the instant the character
+      spawns, before any other logic. Y-maxforce only, Velocity=0.
+    - Parallel task: every 0.5s re-verifies the BV exists on the
+      current HRP, recreates it if missing (e.g. after respawn).
+    - Animation freeze moved to a parallel task that runs regardless
+      of wasFarming (operator asked for "todo el rato"). Every 0.1s
+      it iterates Animator:GetPlayingAnimationTracks() and stops
+      them all.
+
     v0.43 NO MORE MAP-COLLISION STRIP + STATIC WHEN NO TARGET
     (operator: 10s countdown ends, character falls through floor,
     rescue CFrame to top damages via fall; also when no coin is
@@ -491,6 +512,18 @@ local function onCharacter(char)
     tripTarget, tripSince, tripPickupBase = nil, 0, 0
     parkedCoin, parkedUntil = nil, 0
     wasFarming = false
+    -- v0.44: attach hover BV IMMEDIATELY on character spawn so there's
+    -- never a gravity-only frame before the heartbeat engages. This
+    -- is the fix for the "falls through floor at round start" bug
+    -- that operator reported on v0.29-v0.43.
+    local hrp = char:FindFirstChild("HumanoidRootPart")
+    if hrp then
+        local bv = hrp:FindFirstChild("FarmBV") or Instance.new("BodyVelocity", hrp)
+        bv.Name = "FarmBV"
+        bv.MaxForce = Vector3.new(0, 1e6, 0)  -- Y-only hold
+        bv.P = 1e5
+        bv.Velocity = Vector3.zero
+    end
 end
 
 if lp.Character then onCharacter(lp.Character) end
@@ -501,6 +534,43 @@ cacheWaitingLabel()
 
 if noclipStepConn then noclipStepConn:Disconnect() end
 noclipStepConn = RNS.Stepped:Connect(noclipStep)
+
+-- v0.44: UNCONDITIONAL animation freeze. Runs regardless of
+-- wasFarming, so the character stays in a static pose during lobby,
+-- intermission, AND farming. Operator asked for "todo el rato".
+task.spawn(function()
+    while running do
+        if CONFIG.FREEZE_ANIMATIONS then
+            local char = lp.Character
+            local hum = char and char:FindFirstChildOfClass("Humanoid")
+            local animator = hum and hum:FindFirstChildOfClass("Animator")
+            if animator then
+                for _, track in ipairs(animator:GetPlayingAnimationTracks()) do
+                    pcall(function() track:Stop(0) end)
+                end
+            end
+        end
+        task.wait(0.1)
+    end
+end)
+
+-- v0.44: UNCONDITIONAL hover BV maintenance. Even when the farm
+-- heartbeat isn't actively updating velocity, keep the BV attached
+-- with Velocity=0 so the character never freefalls through the map.
+task.spawn(function()
+    while running do
+        local char = lp.Character
+        local hrp = char and char:FindFirstChild("HumanoidRootPart")
+        if hrp and not hrp:FindFirstChild("FarmBV") then
+            local bv = Instance.new("BodyVelocity", hrp)
+            bv.Name = "FarmBV"
+            bv.MaxForce = Vector3.new(0, 1e6, 0)
+            bv.P = 1e5
+            bv.Velocity = Vector3.zero
+        end
+        task.wait(0.5)
+    end
+end)
 
 -- ───────────────────────────────────────────────
 -- v0.24: auto-rejoin watchdog (parallel task)
