@@ -1,4 +1,31 @@
 --!strict
+--[[
+    MM2 CANDY FARM — v0.49 SELF-HEALING HEARTBEAT (for 1000-bot scale)
+    ==================================================================
+    Problem: operator reported bot stops picking candies at random.
+    Live probe: lastDecisionAt frozen for 210s, running=true,
+    wasFarming=true — farmConn silently dead. Across 1000 bots this
+    would be catastrophic and invisible.
+
+    Fix (v0.49):
+    - Heartbeat body moved into `heartbeatTick(dt)` named function.
+    - Pulse `_G.farmDebug.heartbeatTick = os.clock()` at the TOP of
+      the function (before any early-return branch) so we can detect
+      liveness regardless of which branch the tick takes.
+    - Wrap the callback in pcall: any runtime error inside heartbeat
+      is captured in _G.farmDebug.lastError instead of killing the
+      connection.
+    - Parallel watchdog task: every 10s checks heartbeatTick age; if
+      stale >15s while wasFarming is true, disconnect + rebuild the
+      Heartbeat connection. Counts rebuilds in hbRebuildCount.
+    - Watchdog fires a yellow Discord embed per rebuild: account,
+      staleness, rebuild count, last captured error.
+
+    Detection across 1000 bots: inspect `_G.farmDebug.hbRebuildCount`
+    and `_G.farmDebug.heartbeatTick` for every client. Any value >0
+    rebuilds means that bot had a silent death and recovered on its
+    own — no manual intervention needed.
+]]
 -- ════════════════════════════════════════════════════════════════
 -- 🔔 OPERATOR: paste your Discord webhook URL between the quotes.
 -- Leave empty ("") to disable rare-drop notifications.
@@ -1029,8 +1056,13 @@ end
 -- ───────────────────────────────────────────────
 -- HEARTBEAT
 -- ───────────────────────────────────────────────
+-- v0.49: heartbeat wrapped in pcall + wrapped in a named function so a
+-- parallel watchdog can rebuild it if it silently dies.
 local farmConn
-farmConn = RNS.Heartbeat:Connect(function(dt)
+local function heartbeatTick(dt)
+    -- Always pulse the tick BEFORE any branching so the watchdog can
+    -- tell if the callback is firing even in early-return paths.
+    _G.farmDebug.heartbeatTick = os.clock()
     if not running then
         farmConn:Disconnect()
         if noclipStepConn then noclipStepConn:Disconnect() end
@@ -1385,4 +1417,55 @@ farmConn = RNS.Heartbeat:Connect(function(dt)
     end
     bv.Velocity = Vector3.zero
     dsync("lastDecisionAt", os.clock())
+end
+-- Wrap in a safe caller so any error inside heartbeat doesn't kill
+-- the connection itself. Errors are logged to _G.farmDebug.lastError
+-- and the watchdog decides whether to rebuild.
+farmConn = RNS.Heartbeat:Connect(function(dt)
+    local ok, err = pcall(heartbeatTick, dt)
+    if not ok then
+        _G.farmDebug.lastError = tostring(err):sub(1, 180)
+        _G.farmDebug.errorAt = os.clock()
+    end
+end)
+
+-- v0.49: HEARTBEAT WATCHDOG — if heartbeatTick hasn't fired in >15s
+-- while we're supposed to be farming, rebuild the connection. Also
+-- notifies Discord if the webhook is configured.
+task.spawn(function()
+    while running do
+        task.wait(10)
+        local last = _G.farmDebug.heartbeatTick or 0
+        local age = os.clock() - last
+        if age > 15 and _G.farmDebug.wasFarming then
+            _G.farmDebug.hbRebuildCount = (_G.farmDebug.hbRebuildCount or 0) + 1
+            print(("[farm/watchdog] heartbeat dead %ds -> rebuild #%d"):format(
+                math.floor(age), _G.farmDebug.hbRebuildCount))
+            if farmConn then pcall(function() farmConn:Disconnect() end) end
+            farmConn = RNS.Heartbeat:Connect(function(dt)
+                local ok, err = pcall(heartbeatTick, dt)
+                if not ok then
+                    _G.farmDebug.lastError = tostring(err):sub(1, 180)
+                end
+            end)
+            -- Fire-and-forget Discord ping for remote visibility
+            local url = _G.farmWebhookUrl or ""
+            if url ~= "" and not url:find("PASTE_YOUR") then
+                local fn = (http_request) or (request) or (syn and syn.request)
+                if fn then
+                    local body = game:GetService("HttpService"):JSONEncode({
+                        username = "MM2 Farm",
+                        embeds = {{
+                            title = "HEARTBEAT DEAD → rebuilt",
+                            description = string.format("Account: **%s**\nAge: %ds\nRebuild #%d\nLast error: `%s`",
+                                lp.Name, math.floor(age), _G.farmDebug.hbRebuildCount,
+                                tostring(_G.farmDebug.lastError or "none")),
+                            color = 16776960,  -- yellow
+                        }},
+                    })
+                    pcall(fn, {Url=url, Method="POST", Headers={["Content-Type"]="application/json"}, Body=body})
+                end
+            end
+        end
+    end
 end)
