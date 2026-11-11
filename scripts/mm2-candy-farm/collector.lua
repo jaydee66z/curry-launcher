@@ -1,6 +1,19 @@
 --[[
-    MM2 CANDY FARM — v0.18 (Curry Launcher)
+    MM2 CANDY FARM — v0.21 (Curry Launcher)
     =======================================
+    v0.21 OPERATOR FEATURES:
+    - STOP_AT_CANDIES=50: when per-round candies reach the threshold,
+      the bot stops moving entirely and idles like in the lobby
+      (static position; server sees us as an AFK player). Lowers AC
+      profile at the back of each round.
+    - Lifetime candy counter (_G.farmLifetimeCandies) tracks pickups
+      across rounds within the session.
+    - AUTO_BUY_BOX: parallel task reads Candies2026 from ProfileData
+      every 3s; at BOX_BUY_THRESHOLD (600) invokes OpenCrate for
+      "Halloween2026Box" (MysteryBox category, Candies2026 currency).
+      Loop opens as many boxes as credit allows, counts them in
+      _G.farmBoxesOpened for telemetry.
+
     v0.18 SMART PATHING — raycast wall-aware coin picker.
     Operator kicked again after a long-distance pivot through
     multiple walls. The AC flags that pattern. Fixes:
@@ -117,6 +130,14 @@ local CONFIG = {
     -- Combat (v0.13: disabled per operator; sheriff/murderer don't engage)
     COMBAT_ENABLED          = false,
     COMBAT_AT_CANDIES       = 999,
+
+    -- v0.21: stop-at-candies behavior (idle like lobby after threshold)
+    STOP_AT_CANDIES         = 50,
+
+    -- v0.21: Halloween Box auto-buy at lifetime threshold
+    AUTO_BUY_BOX            = true,
+    BOX_BUY_THRESHOLD       = 600,
+    BOX_NAME                = "Halloween2026Box",
     SHERIFF_SHOOT_RANGE     = 60,
     TIME_BETWEEN_SHOTS      = 3.4,
     STAB_RANGE              = 12,
@@ -314,11 +335,16 @@ end
 -- ───────────────────────────────────────────────
 -- Remote listeners
 -- ───────────────────────────────────────────────
+-- v0.21: lifetime candies counter (persistent across rounds within session)
+_G.farmLifetimeCandies = _G.farmLifetimeCandies or 0
+
 CoinCollected.OnClientEvent:Connect(function(coinID)
     candiesThisRound = candiesThisRound + 1
+    _G.farmLifetimeCandies = _G.farmLifetimeCandies + 1
     _G.farmCurrentRound.pickups = (_G.farmCurrentRound.pickups or 0) + 1
     dsync("candiesThisRound", candiesThisRound)
-    dlog(("pickup type=%s total=%d"):format(tostring(coinID), candiesThisRound))
+    dsync("lifetimeCandies", _G.farmLifetimeCandies)
+    dlog(("pickup type=%s round=%d life=%d"):format(tostring(coinID), candiesThisRound, _G.farmLifetimeCandies))
 end)
 
 CoinsStarted.OnClientEvent:Connect(function()
@@ -373,6 +399,45 @@ cacheWaitingLabel()
 
 if noclipStepConn then noclipStepConn:Disconnect() end
 noclipStepConn = RNS.Stepped:Connect(noclipStep)
+
+-- ───────────────────────────────────────────────
+-- v0.21: Halloween Box auto-opener (parallel task)
+-- ───────────────────────────────────────────────
+_G.farmBoxesOpened = _G.farmBoxesOpened or 0
+if CONFIG.AUTO_BUY_BOX then
+    task.spawn(function()
+        local Shop = ReplicatedStorage:WaitForChild("Remotes"):WaitForChild("Shop")
+        local OpenCrate = Shop:WaitForChild("OpenCrate")
+        local ok, ProfileData = pcall(require, ReplicatedStorage:WaitForChild("Modules"):WaitForChild("ProfileData"))
+        if not ok then
+            warn("[farm/box] ProfileData load failed")
+            return
+        end
+        local function getCandies()
+            return (ProfileData.Materials and ProfileData.Materials.Owned and ProfileData.Materials.Owned.Candies2026) or 0
+        end
+        dsync("boxCurrency", "Candies2026")
+        while running do
+            local c = getCandies()
+            dsync("profileCandies", c)
+            if c >= CONFIG.BOX_BUY_THRESHOLD then
+                local before = c
+                pcall(function() OpenCrate:InvokeServer(CONFIG.BOX_NAME, "MysteryBox", "Candies2026") end)
+                task.wait(0.4)
+                local after = getCandies()
+                if (before - after) >= CONFIG.BOX_BUY_THRESHOLD then
+                    _G.farmBoxesOpened = _G.farmBoxesOpened + 1
+                    dsync("boxesOpened", _G.farmBoxesOpened)
+                    dlog(("box OPENED #%d (candies %d -> %d)"):format(_G.farmBoxesOpened, before, after))
+                else
+                    dlog(("box buy failed (candies %d -> %d)"):format(before, after))
+                    task.wait(3)
+                end
+            end
+            task.wait(3)
+        end
+    end)
+end
 
 -- ───────────────────────────────────────────────
 -- Gates / role / danger / map
@@ -617,6 +682,18 @@ farmConn = RNS.Heartbeat:Connect(function(dt)
         hum.WalkSpeed = CONFIG.FORCE_WALKSPEED
     end
     hum.PlatformStand = true
+
+    -- v0.21: STOP_AT_CANDIES — idle (like lobby) once threshold reached.
+    -- Character stays in place; noclip and hover still active for safety
+    -- but no coin pursuit. Server sees us as a static (afk) player.
+    if candiesThisRound >= CONFIG.STOP_AT_CANDIES then
+        local bv2 = hrp:FindFirstChild("FarmBV") or setupHover(hrp)
+        bv2.Velocity = Vector3.zero
+        tripTarget = nil
+        parkedCoin, parkedUntil = nil, 0
+        dsync("tripCoinID", "stopped-at-threshold")
+        return
+    end
     local bv       = hrp:FindFirstChild("FarmBV") or setupHover(hrp)
     local myPos    = hrp.Position
     local mySpeed  = math.max(1, hum.WalkSpeed)
