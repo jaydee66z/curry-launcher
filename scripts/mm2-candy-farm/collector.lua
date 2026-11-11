@@ -1,6 +1,19 @@
 --[[
-    MM2 CANDY FARM — v0.45 (Curry Launcher)
+    MM2 CANDY FARM — v0.47 (Curry Launcher)
     =======================================
+    v0.47 ANTI-STALL (analyzed 3 rounds via a parallel stall monitor):
+    - Stall type A: bot on a candy, nearestDist=0, Touched never fires.
+      Fix: in the reach branch, ALSO call GetCoin:FireServer(coin)
+      as a fallback alongside the park/MoveTo wait. Server dedupes
+      if Touched also fires. Guarantees pickup on CFrame/MoveTo-
+      driven contact that normally wouldn't trigger Touched.
+    - Stall type B: new round, 10-16 active candies at 50-57 studs,
+      getBestCoin returned nil for 8s. Root cause: winsContest filter
+      rejected coins where any other player had similar arrival time
+      (TIE_MARGIN=1.15, TIME_MARGIN=0.7). At round start when
+      everyone's near spawn, most coins failed this. Fix: CONTEST=false
+      so the bot takes any coin it can reach.
+
     v0.45 EMBERSICKLE DROP WEBHOOK (operator ask):
     Internal names discovered live by inspecting ReplicatedStorage
     .Database.Sync.Item and .MysteryBox.Halloween2026Box:
@@ -307,7 +320,7 @@ local CONFIG = {
     BELOW_MAP_Y_DELTA       = -80,   -- if HRP.Y < bboxBottom + delta, rescue
 
     -- Contest / danger
-    CONTEST                 = true,
+    CONTEST                 = false,   -- v0.47: disabled; bot takes any coin it can reach
     AVOID_MURDERER_RADIUS   = 35,
     MURDER_SAFE             = 30,
     SHERIFF_SAFE            = 20,
@@ -1237,8 +1250,17 @@ farmConn = RNS.Heartbeat:Connect(function(dt)
             end
             parkedCoin  = coin
             parkedUntil = os.clock() + CONFIG.TIME_ON_COIN
-            -- Keep humanoid moving toward coin while parked so the
-            -- character doesn't stop short with visible gap
+            -- v0.47: ALSO fire GetCoin as a fallback. Touched often
+            -- fails to register on CFrame-driven HRP even with MoveTo,
+            -- causing the "stuck on coin, no pickup" stall observed
+            -- in telemetry. Firing GetCoin here forces the server to
+            -- register the pickup; if Touched also fires, no harm
+            -- (server dedupes).
+            local last = firedAt[coin] or 0
+            if (os.clock() - last) > 0.4 then
+                pcall(function() GetCoin:FireServer(coin) end)
+                firedAt[coin] = os.clock()
+            end
             if CONFIG.HUMANIZED then
                 hum:MoveTo(Vector3.new(coinPos.X, hrp.Position.Y, coinPos.Z))
             else
