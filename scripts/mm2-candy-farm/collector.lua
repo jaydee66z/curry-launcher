@@ -614,15 +614,20 @@ if CONFIG.STALL_WATCHDOG then
         while running do
             task.wait(10)
             local life = _G.farmLifetimeCandies or 0
-            if life > lastKnownLife then
+            -- v0.32: reset timer during lobby / non-farming windows so
+            -- the watchdog never fires from waiting for a round to
+            -- start (shouldFarm=false has no pickup activity).
+            if not (_G.farmDebug and _G.farmDebug.wasFarming) then
+                lastChangeAt = os.clock()
+            elseif life > lastKnownLife then
                 lastKnownLife = life
                 lastChangeAt  = os.clock()
             else
                 local idle = os.clock() - lastChangeAt
                 if idle > CONFIG.STALL_NO_PICKUP_WINDOW then
-                    print(("[farm/stall] %ds without pickup -> teleporting to new server"):format(math.floor(idle)))
+                    print(("[farm/stall] %ds farming without pickup -> teleporting to new server"):format(math.floor(idle)))
                     pcall(function() TeleportService:Teleport(game.PlaceId, lp) end)
-                    task.wait(15)  -- let teleport process
+                    task.wait(15)
                     lastChangeAt = os.clock()
                 end
             end
