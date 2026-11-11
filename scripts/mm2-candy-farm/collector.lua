@@ -1,6 +1,18 @@
 --[[
-    MM2 CANDY FARM — v0.44 (Curry Launcher)
+    MM2 CANDY FARM — v0.45 (Curry Launcher)
     =======================================
+    v0.45 EMBERSICKLE DROP WEBHOOK (operator ask):
+    Internal names discovered live by inspecting ReplicatedStorage
+    .Database.Sync.Item and .MysteryBox.Halloween2026Box:
+      - 'Embersickle'        -> Godly, common variant
+      - 'EmbersickleChroma'  -> Godly + Chroma=true
+    Both appear in ProfileData.Weapons.Owned as keys when granted.
+    Parallel task snapshots the Owned table on load, polls every 2s,
+    and sends a Discord embed whenever a NEW key matches NOTIFY_ITEMS.
+    Executor-agnostic transport: http_request / request / syn.request
+    / fluxus.request / http.request (first available wins).
+    WEBHOOK_URL placeholder in CONFIG — operator must paste theirs.
+
     v0.44 PERMANENT HOVER + ALWAYS-ON ANIM FREEZE (root-cause fix
     for the recurring "falls through floor at round start" bug):
 
@@ -225,6 +237,16 @@ local CONFIG = {
     AUTO_BUY_BOX            = true,
     BOX_BUY_THRESHOLD       = 600,
     BOX_NAME                = "Halloween2026Box",
+
+    -- v0.45 Discord webhook on rare pull from Halloween2026Box.
+    -- Internal names found live in ProfileData.Weapons.Owned:
+    --   Embersickle        = Godly (common variant)
+    --   EmbersickleChroma  = Godly + Chroma=true
+    WEBHOOK_URL             = "PASTE_YOUR_DISCORD_WEBHOOK_HERE",
+    NOTIFY_ITEMS            = {
+        ["Embersickle"]       = "common",
+        ["EmbersickleChroma"] = "chroma",
+    },
 
     -- v0.24: auto-rejoin on kick / disconnect prompt
     AUTO_REJOIN             = true,
@@ -625,6 +647,76 @@ end
 -- ───────────────────────────────────────────────
 -- v0.21: Halloween Box auto-opener (parallel task)
 -- ───────────────────────────────────────────────
+-- v0.45: Discord webhook sender (executor-agnostic)
+local function sendWebhook(payload)
+    local url = CONFIG.WEBHOOK_URL
+    if not url or url == "" or url:find("PASTE_YOUR") then
+        warn("[farm/webhook] WEBHOOK_URL not set; skipping")
+        return false
+    end
+    local fn = (http_request) or (request) or (syn and syn.request) or (fluxus and fluxus.request) or (http and http.request)
+    if not fn then warn("[farm/webhook] no http function in executor"); return false end
+    local ok, resp = pcall(fn, {
+        Url = url, Method = "POST",
+        Headers = {["Content-Type"] = "application/json"},
+        Body = game:GetService("HttpService"):JSONEncode(payload),
+    })
+    if ok then
+        print(("[farm/webhook] sent → %s"):format(tostring(resp and (resp.StatusCode or resp.Status) or "?")))
+        return true
+    else
+        warn("[farm/webhook] POST failed: " .. tostring(resp))
+        return false
+    end
+end
+
+local function notifyEmbersickle(itemKey, variant)
+    local user  = lp.Name
+    local uid   = lp.UserId
+    local color = (variant == "chroma") and 15844367 or 11027200
+    local payload = {
+        username = "MM2 Farm",
+        embeds = {{
+            title = "EMBERSICKLE DROP",
+            description = string.format(
+                "Account: **%s** (UserId `%d`)\nItem: **%s**\nVariant: **%s**\nRarity: **Godly**",
+                user, uid, itemKey, variant),
+            color = color,
+        }},
+    }
+    sendWebhook(payload)
+end
+
+-- v0.45: inventory watcher — polls ProfileData.Weapons.Owned every 2s
+-- for new NOTIFY_ITEMS keys. First keys at startup form the baseline
+-- (not notified). Any NEW key matching the table triggers notify.
+task.spawn(function()
+    local ok, PD = pcall(require, ReplicatedStorage:WaitForChild("Modules"):WaitForChild("ProfileData"))
+    if not ok then warn("[farm/inv] ProfileData load failed"); return end
+    local function snapshot()
+        local s = {}
+        local owned = PD.Weapons and PD.Weapons.Owned
+        if owned then for k, _ in pairs(owned) do s[tostring(k)] = true end end
+        return s
+    end
+    local baseline = snapshot()
+    local alreadyNotified = {}
+    print(("[farm/inv] baseline captured (%d owned items)"):format((function() local n=0; for _ in pairs(baseline) do n=n+1 end; return n end)()))
+    while running do
+        task.wait(2)
+        local now = snapshot()
+        for key, _ in pairs(now) do
+            if not baseline[key] and CONFIG.NOTIFY_ITEMS[key] and not alreadyNotified[key] then
+                local variant = CONFIG.NOTIFY_ITEMS[key]
+                print(("[farm/inv] NEW DROP: %s (%s)"):format(key, variant))
+                notifyEmbersickle(key, variant)
+                alreadyNotified[key] = true
+            end
+        end
+        baseline = now  -- promote current to baseline so further additions count
+    end
+end)
+
 _G.farmBoxesOpened = _G.farmBoxesOpened or 0
 if CONFIG.AUTO_BUY_BOX then
     task.spawn(function()
