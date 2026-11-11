@@ -1,6 +1,17 @@
 --[[
-    MM2 CANDY FARM — v0.23 (Curry Launcher)
+    MM2 CANDY FARM — v0.25 (Curry Launcher)
     =======================================
+    v0.25 CONSTANT SPEED + MAP-WIDE NOCLIP:
+    - Y velocity in humanized mode CAPPED to CONFIG.SPEED (16). Before,
+      the Y correction was (targetY - myPos.Y) * 4 which could reach
+      200+ studs/sec for shelf/ceiling candies — looked like teleport.
+      Now vertical motion matches horizontal walkspeed exactly.
+    - On CoinsStarted: strip EVERY BasePart.CanCollide=false in the
+      current map's root Model (Manor/Barn/etc). No structures can
+      wedge the bot since nothing collides with the character.
+      (We don't Destroy parts — that would break game logic — just
+      disable collision. Visually the map still renders.)
+
     v0.23 HUMANIZED MOVEMENT (operator: "se ve algo hacker"):
     - PlatformStand=false (humanoid plays walking animations).
     - Humanoid:MoveTo(coin.XZ) drives real locomotion — real rotation,
@@ -376,6 +387,26 @@ CoinCollected.OnClientEvent:Connect(function(coinID)
     dlog(("pickup type=%s round=%d life=%d"):format(tostring(coinID), candiesThisRound, _G.farmLifetimeCandies))
 end)
 
+-- v0.25: strip every collision in the current map model on round start.
+-- "Eliminate" per operator means: nothing in the map blocks movement.
+-- We don't Destroy parts (that breaks game logic), just set CanCollide
+-- =false + CanTouch=true on every BasePart in the map's root Model.
+local function noclipEntireMap()
+    cacheCoinContainer()
+    if not coinContainer then return 0 end
+    local root = coinContainer.Parent
+    if not root then return 0 end
+    local count = 0
+    for _, p in ipairs(root:GetDescendants()) do
+        if p:IsA("BasePart") and p.CanCollide then
+            p.CanCollide = false
+            count = count + 1
+        end
+    end
+    dlog(("map noclip applied: %d parts"):format(count))
+    return count
+end
+
 CoinsStarted.OnClientEvent:Connect(function()
     -- Snapshot previous round to telemetry
     if _G.farmCurrentRound and _G.farmCurrentRound.pickups and _G.farmCurrentRound.pickups > 0 then
@@ -392,6 +423,12 @@ CoinsStarted.OnClientEvent:Connect(function()
     roundStartAt = os.clock()
     candiesThisRound = 0
     dsync("candiesThisRound", 0)
+    -- v0.25: strip the whole map's collision so nothing can wedge us
+    task.spawn(function()
+        task.wait(0.8)  -- let map load fully
+        local n = noclipEntireMap()
+        dsync("mapNoclipParts", n)
+    end)
     dlog("CoinsStarted: new round")
 end)
 
@@ -1034,9 +1071,14 @@ farmConn = RNS.Heartbeat:Connect(function(dt)
             hum.Jump = true
             lastJumpAt = os.clock()
         end
-        -- Sync Y to coin.Y via BV (keeps us at pickup height on ledges)
+        -- Sync Y to coin.Y via BV, but CAPPED to WalkSpeed so vertical
+        -- motion matches horizontal (no 200-studs/sec Y yank for
+        -- ceiling/floor candies).
         local targetY = target.Y
-        bv.Velocity = Vector3.new(0, (targetY - myPos.Y) * 4, 0)
+        local vy = (targetY - myPos.Y) * 4
+        local cap = CONFIG.SPEED
+        if vy > cap then vy = cap elseif vy < -cap then vy = -cap end
+        bv.Velocity = Vector3.new(0, vy, 0)
         -- Within final snap distance: freeze XZ at exact coin pos
         if remaining < CONFIG.SNAP_FINAL_DISTANCE then
             safeMove(hrp, target, dt)
