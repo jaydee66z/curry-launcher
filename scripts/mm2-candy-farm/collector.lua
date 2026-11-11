@@ -1,6 +1,18 @@
 --[[
-    MM2 CANDY FARM — v0.28 (Curry Launcher)
+    MM2 CANDY FARM — v0.29 (Curry Launcher)
     =======================================
+    v0.29 ANTI-VOID-FALL AT ROUND START:
+    - Floor-raycast guard before every humanized move: if no floor
+      within 15 studs below HRP, force +SPEED Y velocity to rise
+      back to geometry. Fixes the "bot falls through floor when
+      noclip engages at round start" scenario.
+    - Y descent CAPPED to -3 studs/sec (was -SPEED). Floor-level
+      candies used to produce vy = -60 which teleport-dropped us
+      through the noclipped floor into the void.
+    - Hover BV is now instantiated AT THE INSTANT wasFarming engages
+      (not lazily in the step), so there's no gravity-only frame
+      between noclip-on and BV-created.
+
     v0.28 DISCORD WEBHOOK ON RARE DROP (operator asks for Embersickle
     notify, common + chroma variants).
     - CONFIG.WEBHOOK_URL: paste your Discord webhook (or set env-style
@@ -920,6 +932,10 @@ farmConn = RNS.Heartbeat:Connect(function(dt)
         refreshHeadOffset(char)
         smoothDir  = Vector3.new(hrp.CFrame.LookVector.X, 0, hrp.CFrame.LookVector.Z)
         if smoothDir.Magnitude < 0.01 then smoothDir = Vector3.new(0,0,1) else smoothDir = smoothDir.Unit end
+        -- v0.29: set up hover BV AT THE INSTANT noclip engages so the
+        -- character never has a gravity frame without vertical hold
+        local bvEarly = setupHover(hrp)
+        bvEarly.Velocity = Vector3.new(0, 0, 0)
         dlog(("ENGAGE: role=%s head=%.2f speed=%d"):format(myRole, headOffset, CONFIG.SPEED))
         dsync("myRole", myRole)
         dsync("wasFarming", true)
@@ -1208,6 +1224,24 @@ farmConn = RNS.Heartbeat:Connect(function(dt)
         end
     end
 
+    -- v0.29 FLOOR GUARD: raycast down from HRP; if no floor within
+    -- 15 studs, we're in the void — force positive Y velocity to
+    -- climb out. Prevents "falls at round start" when noclip engages
+    -- before character has settled on the floor.
+    if CONFIG.HUMANIZED then
+        local rp = RaycastParams.new()
+        rp.FilterType = Enum.RaycastFilterType.Exclude
+        rp.FilterDescendantsInstances = {char}
+        local hit = workspace:Raycast(myPos, Vector3.new(0, -15, 0), rp)
+        if not hit then
+            -- Void below us; rise at SPEED studs/sec until we re-acquire floor
+            bv.Velocity = Vector3.new(0, CONFIG.SPEED, 0)
+            hum:MoveTo(myPos)  -- hold XZ while rising
+            dsync("floorGuard", "RISING_NO_FLOOR")
+            return
+        end
+    end
+
     -- v0.23 HUMANIZED: let the Humanoid walk toward the coin. MoveTo
     -- drives real locomotion (plays walking animations, rotates the
     -- character naturally, uses the character's own stepping cadence).
@@ -1227,13 +1261,16 @@ farmConn = RNS.Heartbeat:Connect(function(dt)
             hum.Jump = true
             lastJumpAt = os.clock()
         end
-        -- Sync Y to coin.Y via BV, but CAPPED to WalkSpeed so vertical
-        -- motion matches horizontal (no 200-studs/sec Y yank for
-        -- ceiling/floor candies).
+        -- v0.29 Y SYNC: never descend FAST (capped at -3 studs/sec).
+        -- Floor-level candies used to produce vy = -60 which pulled us
+        -- through the noclipped floor into the void at round start.
+        -- We walk DOWN onto a floor candy slowly or stay level and let
+        -- gravity-like micro-descent handle it. Ascend still SPEED cap.
         local targetY = target.Y
         local vy = (targetY - myPos.Y) * 4
-        local cap = CONFIG.SPEED
-        if vy > cap then vy = cap elseif vy < -cap then vy = -cap end
+        local upCap = CONFIG.SPEED
+        local downCap = -3
+        if vy > upCap then vy = upCap elseif vy < downCap then vy = downCap end
         bv.Velocity = Vector3.new(0, vy, 0)
         -- Within final snap distance: freeze XZ at exact coin pos
         if remaining < CONFIG.SNAP_FINAL_DISTANCE then
