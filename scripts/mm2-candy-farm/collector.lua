@@ -1,6 +1,30 @@
 --[[
-    MM2 CANDY FARM — v0.35 (Curry Launcher)
+    MM2 CANDY FARM — v0.37 (Curry Launcher)
     =======================================
+    v0.37 LIGHTER STATIC LOCK (v0.36 was too tight — bot wouldn't
+    move between candies). Operator loves the static look but the
+    SetStateEnabled lockdown also blocked physics updates needed
+    for CFrame-driven HRP translation.
+    - Keep PlatformStand=true, WalkSpeed=0, JumpPower=0, and
+      animation stopping every frame.
+    - Remove SetStateEnabled lockdown so engine physics still
+      process HRP CFrame writes and we move between coins.
+
+    v0.36 HARD STATIC MANNEQUIN (video reference):
+    - v0.35 PlatformStand=true wasn't enough — humanoid kept
+      flipping back to Running state and playing animations.
+    - v0.36 locks Humanoid completely:
+      * PlatformStand=true
+      * WalkSpeed=0, JumpPower=0
+      * SetStateEnabled(false) for EVERY humanoid state except
+        PlatformStanding + None (one-time lock, stored in
+        _G.farmStatesLocked). Engine can't enter Running/Falling/
+        Jumping/Freefall/etc.
+      * ChangeState(PlatformStanding) each frame
+      * Animator tracks force-stopped each frame
+    - stopFarm restores state enables + walkspeed/jump so lobby
+      behavior is normal when not farming.
+
     v0.35 STATIC-MODEL TELEPORT-STEP (operator: humanoid walk path
     wasn't going through walls; wants the character model completely
     frozen while HRP translates to each coin):
@@ -1021,7 +1045,9 @@ end
 local function stopFarm(char, hrp, hum)
     if not char or not hrp or not hum then return end
     hum.PlatformStand = false
-    hum.WalkSpeed = 16  -- restore default so lobby/menu feels normal
+    hum.WalkSpeed = 16
+    hum.JumpPower = 50
+    -- (v0.36 state locking removed; nothing to restore)
     local bv = hrp:FindFirstChild("FarmBV"); if bv then bv:Destroy() end
     for _, p in ipairs(char:GetDescendants()) do
         if p:IsA("BasePart") then p.CanCollide = true end
@@ -1092,10 +1118,14 @@ farmConn = RNS.Heartbeat:Connect(function(dt)
     if CONFIG.HUMANIZED then
         hum.PlatformStand = false
     else
+        -- v0.37 STATIC MANNEQUIN (lighter): PlatformStand + WalkSpeed=0
+        -- + anim stop — enough to keep the rig frozen while CFrame
+        -- writes physically translate the HRP. No SetStateEnabled
+        -- lockdown (v0.36 version blocked physics too; bot stopped
+        -- moving between coins).
         hum.PlatformStand = true
-        -- v0.35: keep stopping animations each frame — PlatformStand
-        -- alone doesn't always kill them (some are triggered by state
-        -- changes). This guarantees a fully static model.
+        hum.WalkSpeed     = 0
+        hum.JumpPower     = 0
         if CONFIG.FREEZE_ANIMATIONS then
             local animator = hum:FindFirstChildOfClass("Animator")
             if animator then
