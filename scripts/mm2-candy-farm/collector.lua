@@ -1,6 +1,24 @@
 --[[
-    MM2 CANDY FARM — v0.21 (Curry Launcher)
+    MM2 CANDY FARM — v0.23 (Curry Launcher)
     =======================================
+    v0.23 HUMANIZED MOVEMENT (operator: "se ve algo hacker"):
+    - PlatformStand=false (humanoid plays walking animations).
+    - Humanoid:MoveTo(coin.XZ) drives real locomotion — real rotation,
+      real stepping, real idle twitches.
+    - Hover BV holds Y, driven toward coin.Y so we rise/fall smoothly
+      to shelf candies (no instant teleport up).
+    - Noclip still active via Stepped (pre-physics) so we traverse
+      walls — but now with walking animations playing, visually
+      indistinguishable from a legit player.
+    - Final SNAP only within SNAP_FINAL_DISTANCE (2 studs) for pickup
+      accuracy — invisible since we're already walking onto the coin.
+    - Random micro-pauses + occasional jump (JUMP_CHANCE=0.015) add
+      human-grade noise.
+    - SPEED=16 synced to WalkSpeed so position deltas match.
+
+    Known bug: Barn / zombies map rescue triggers (Y bounds tight).
+    Will tune per-map margins when back in that rotation.
+
     v0.21 OPERATOR FEATURES:
     - STOP_AT_CANDIES=50: when per-round candies reach the threshold,
       the bot stops moving entirely and idles like in the lobby
@@ -143,11 +161,18 @@ local CONFIG = {
     STAB_RANGE              = 12,
     TIME_BETWEEN_STABS      = 1.5,
 
-    -- Movement (v0.18: smart pathing — raycast wall scoring)
-    SPEED                   = 12,
+    -- Movement (v0.23: humanized — humanoid walks with animations,
+    -- noclip still bypasses walls, final snap for pickup accuracy)
+    HUMANIZED               = true,    -- v0.23: use Humanoid:MoveTo + anims
+    SPEED                   = 16,      -- match humanoid walkspeed exactly
     FORCE_WALKSPEED         = 16,
-    MAX_FRAME_STEP          = 0.22,
+    MAX_FRAME_STEP          = 0.3,
     COOLDOWN_BETWEEN_COINS  = 0.2,
+    MICRO_PAUSE_MIN         = 0.05,    -- random reaction time between coins
+    MICRO_PAUSE_MAX         = 0.18,
+    SNAP_FINAL_DISTANCE     = 2.0,     -- snap to coin only within this (hides teleport)
+    JUMP_CHANCE             = 0.015,   -- occasional jump (human idle twitch)
+    JUMP_COOLDOWN           = 1.5,
 
     -- Pathing intelligence (v0.19 softened)
     WALL_RAYCAST            = true,
@@ -683,7 +708,14 @@ farmConn = RNS.Heartbeat:Connect(function(dt)
     if hum.WalkSpeed ~= CONFIG.FORCE_WALKSPEED then
         hum.WalkSpeed = CONFIG.FORCE_WALKSPEED
     end
-    hum.PlatformStand = true
+    -- v0.23: in humanized mode we LEAVE PlatformStand=false so the
+    -- humanoid plays walking animations naturally. Y is held by the
+    -- hover BV; noclip bypasses walls; physics does the rest.
+    if CONFIG.HUMANIZED then
+        hum.PlatformStand = false
+    else
+        hum.PlatformStand = true
+    end
 
     -- v0.21: STOP_AT_CANDIES — idle (like lobby) once threshold reached.
     -- Character stays in place; noclip and hover still active for safety
@@ -929,14 +961,41 @@ farmConn = RNS.Heartbeat:Connect(function(dt)
         end
     end
 
-    -- v0.15 HUMANIZED STEP: smooth heading via lerp toward target
-    -- direction so sharp coin-to-coin pivots feel natural (not a
-    -- teleport flick). Step size still SPEED*dt capped so the
-    -- humanoid's own WalkSpeed validation on the server matches.
+    -- v0.23 HUMANIZED: let the Humanoid walk toward the coin. MoveTo
+    -- drives real locomotion (plays walking animations, rotates the
+    -- character naturally, uses the character's own stepping cadence).
+    -- Noclip still bypasses walls; the hover BV keeps Y stable. When
+    -- within SNAP_FINAL_DISTANCE we quietly snap for pickup accuracy.
+    if CONFIG.HUMANIZED then
+        local diff = target - myPos
+        local remaining = diff.Magnitude
+        -- Flatten X/Z for MoveTo target to avoid the humanoid trying
+        -- to raycast up to a coin on a ledge (it can't jump+walk at
+        -- the same time reliably). HipHeight+hover holds our Y.
+        local moveTarget = Vector3.new(target.X, hrp.Position.Y, target.Z)
+        hum:MoveTo(moveTarget)
+        -- Occasional human jump twitch
+        if math.random() < CONFIG.JUMP_CHANCE
+           and (os.clock() - lastJumpAt) > CONFIG.JUMP_COOLDOWN then
+            hum.Jump = true
+            lastJumpAt = os.clock()
+        end
+        -- Sync Y to coin.Y via BV (keeps us at pickup height on ledges)
+        local targetY = target.Y
+        bv.Velocity = Vector3.new(0, (targetY - myPos.Y) * 4, 0)
+        -- Within final snap distance: freeze XZ at exact coin pos
+        if remaining < CONFIG.SNAP_FINAL_DISTANCE then
+            safeMove(hrp, target, dt)
+            bv.Velocity = Vector3.zero
+        end
+        dsync("lastDecisionAt", os.clock())
+        return
+    end
+
+    -- Non-humanized fallback (v0.15 CFrame step w/ smoothing)
     local diff = target - myPos
     local remaining = diff.Magnitude
     local rawDir = remaining > 0.01 and diff.Unit or smoothDir
-    -- Lerp smoothDir toward rawDir
     smoothDir = (smoothDir:Lerp(rawDir, CONFIG.DIR_SMOOTH))
     if smoothDir.Magnitude < 0.01 then smoothDir = rawDir end
     smoothDir = smoothDir.Unit
