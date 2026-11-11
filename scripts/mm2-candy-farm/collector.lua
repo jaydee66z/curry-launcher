@@ -1,6 +1,24 @@
 --[[
-    MM2 CANDY FARM — v0.7 (Curry Launcher)
+    MM2 CANDY FARM — v0.8 (Curry Launcher)
     ======================================
+    v0.8 ANTI-STUCK: v0.7 fixed the server kicks but the bot still
+    looped on unreachable candies (ceiling, inside geometry, hitbox
+    mismatch). It would park, time out, defer for RETRY_AFTER, and
+    re-select the SAME candy on the next tick since it was still the
+    closest. Fixes:
+    - Per-coin attempt counter. After MAX_ATTEMPTS (2) failed park
+      cycles, the coin is visited=true for the round (never picked
+      again). Prevents the ceiling-candy infinite loop shown in
+      live play.
+    - Trip watchdog: if tripTarget hasn't changed in STUCK_TIMEOUT (4s)
+      AND no pickup fired, mark the target visited and clear. Catches
+      cases where the bot physically can't make progress (walled off,
+      target inside a locked door, etc).
+    - RETRY_AFTER tightened 1.5 -> 0.6 so defers rotate faster.
+    - Attempts/visited counts exposed in _G.farmDebug for live probing.
+    - dlog on each discard so console shows why a coin was abandoned.
+
+    v0.7 ANTI-KICK: user received "Server Kick Message: Invalid position"
     v0.7 ANTI-KICK: user received "Server Kick Message: Invalid position"
     while farming. Triggers identified and mitigated:
     - SPEED=26 is the kick edge. Lower default to 18. The reference
@@ -108,7 +126,9 @@ local CONFIG = {
     MAX_DT                  = 0.05,   -- clamp dt before computing step
     MAX_JUMP                = 25,     -- reject coins requiring a >25 stud jump
     TIME_ON_COIN            = 0.15,
-    RETRY_AFTER             = 1.5,
+    RETRY_AFTER             = 0.6,     -- v0.8: 1.5 -> 0.6 (faster rotation)
+    MAX_ATTEMPTS            = 2,       -- v0.8: >N park-fails -> permanently visited
+    STUCK_TIMEOUT           = 4.0,     -- v0.8: same tripTarget held this long -> abandon
     STOP_SHORT              = 0,
     HEIGHT_WEIGHT           = 1,
     CLUSTER_WEIGHT          = 0,
@@ -137,9 +157,12 @@ local CONFIG = {
 -- v0.6: keyed by coin INSTANCE (weak table so GC'd coins drop out).
 local visited        = setmetatable({}, {__mode = "k"})
 local deferredUntil  = setmetatable({}, {__mode = "k"})
+local attempts       = setmetatable({}, {__mode = "k"})  -- v0.8
 local parkedUntil    = 0
 local parkedCoin     = nil
 local tripTarget     = nil
+local tripSince      = 0                                 -- v0.8
+local tripPickupBaseline = 0                             -- v0.8
 local roundStartAt   = 0
 local candiesThisRound = 0
 
@@ -276,7 +299,10 @@ end)
 CoinsStarted.OnClientEvent:Connect(function()
     visited = setmetatable({}, {__mode = "k"})
     deferredUntil = setmetatable({}, {__mode = "k"})
+    attempts = setmetatable({}, {__mode = "k"})
     tripTarget = nil
+    tripSince = 0
+    tripPickupBaseline = 0
     parkedCoin = nil
     parkedUntil = 0
     roundStartAt = os.clock()
@@ -626,10 +652,18 @@ farmConn = RNS.Heartbeat:Connect(function(dt)
             return
         end
     elseif parkedCoin then
-        -- Park window elapsed without confirmation -> defer this specific coin
-        -- instance and move on to the next.
+        -- Park window elapsed without confirmation.
         if parkedCoin.Parent and not parkedCoin:GetAttribute("Collected") then
-            deferredUntil[parkedCoin] = os.clock() + CONFIG.RETRY_AFTER
+            -- v0.8: bump attempt counter. After MAX_ATTEMPTS, bury the coin
+            -- for the whole round so we stop re-selecting an unreachable one.
+            local n = (attempts[parkedCoin] or 0) + 1
+            attempts[parkedCoin] = n
+            if n >= CONFIG.MAX_ATTEMPTS then
+                visited[parkedCoin] = true
+                dlog("discard: max attempts on coin")
+            else
+                deferredUntil[parkedCoin] = os.clock() + CONFIG.RETRY_AFTER
+            end
         else
             visited[parkedCoin] = true
         end
@@ -658,7 +692,19 @@ farmConn = RNS.Heartbeat:Connect(function(dt)
 
     if tripTarget ~= coin then
         tripTarget = coin
+        tripSince = os.clock()
+        tripPickupBaseline = candiesThisRound
         dsync("tripCoinID", coin:GetAttribute("CoinID"))
+    else
+        -- v0.8 WATCHDOG: same target too long, no pickup -> bury it.
+        if (os.clock() - tripSince) > CONFIG.STUCK_TIMEOUT
+            and candiesThisRound == tripPickupBaseline then
+            visited[coin] = true
+            tripTarget = nil
+            bv.Velocity = Vector3.zero
+            dlog("discard: stuck timeout on coin")
+            return
+        end
     end
 
     -- v0.5 PICKUP: always target coin.Y - headOffset so the head
