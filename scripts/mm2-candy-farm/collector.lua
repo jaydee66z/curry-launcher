@@ -1,6 +1,16 @@
 --[[
-    MM2 CANDY FARM — v0.25 (Curry Launcher)
+    MM2 CANDY FARM — v0.26 (Curry Launcher)
     =======================================
+    v0.26 NO MINI-TELEPORT ON PICKUP (operator: "que se mueva hasta
+    la direccion donde se miniteletransporta"):
+    - SNAP_FINAL_DISTANCE = 0 (was 2.0). Humanoid walks ALL the way
+      into the coin, no final CFrame hop.
+    - Park-on-reach branch no longer snaps; it keeps calling MoveTo
+      so the character micro-steps onto the coin with real motion.
+    - Park-pin loop (holding HRP at coin.Position) also switched to
+      MoveTo + capped Y velocity instead of CFrame pinning. Looks
+      like a player standing on the coin, not teleporting onto it.
+
     v0.25 CONSTANT SPEED + MAP-WIDE NOCLIP:
     - Y velocity in humanized mode CAPPED to CONFIG.SPEED (16). Before,
       the Y correction was (targetY - myPos.Y) * 4 which could reach
@@ -185,7 +195,7 @@ local CONFIG = {
     COOLDOWN_BETWEEN_COINS  = 0.2,
     MICRO_PAUSE_MIN         = 0.05,    -- random reaction time between coins
     MICRO_PAUSE_MAX         = 0.18,
-    SNAP_FINAL_DISTANCE     = 2.0,     -- snap to coin only within this (hides teleport)
+    SNAP_FINAL_DISTANCE     = 0,       -- v0.26: disabled — walk all the way in, no snap
     JUMP_CHANCE             = 0.015,   -- occasional jump (human idle twitch)
     JUMP_COOLDOWN           = 1.5,
 
@@ -918,11 +928,24 @@ farmConn = RNS.Heartbeat:Connect(function(dt)
             visited[parkedCoin] = true
             parkedCoin, parkedUntil = nil, 0
         else
-            -- Keep HRP pinned exactly on the coin every frame
+            -- v0.26 humanized park: keep WALKING onto the coin via
+            -- MoveTo instead of CFrame-pinning (which looks like a
+            -- freeze+teleport). Humanoid will micro-step the last
+            -- fraction of a stud and the torso overlap triggers the
+            -- server's Touched handler.
             if parkedCoin.Parent then
-                safeMove(hrp, parkedCoin.Position)
+                if CONFIG.HUMANIZED then
+                    hum:MoveTo(Vector3.new(parkedCoin.Position.X, hrp.Position.Y, parkedCoin.Position.Z))
+                    -- Y correction via BV, capped at SPEED
+                    local vy = (parkedCoin.Position.Y - hrp.Position.Y) * 4
+                    local cap = CONFIG.SPEED
+                    if vy > cap then vy = cap elseif vy < -cap then vy = -cap end
+                    bv.Velocity = Vector3.new(0, vy, 0)
+                else
+                    safeMove(hrp, parkedCoin.Position)
+                    bv.Velocity = Vector3.zero
+                end
             end
-            bv.Velocity = Vector3.zero
             return
         end
     elseif parkedCoin then
@@ -1043,11 +1066,22 @@ farmConn = RNS.Heartbeat:Connect(function(dt)
             bv.Velocity = Vector3.zero
             return
         else
-            -- Fallback (not used in v0.14): snap + park
-            if CONFIG.SNAP_ON_REACH then safeMove(hrp, coinPos) end
-            bv.Velocity = Vector3.zero
+            -- v0.26: in humanized mode, DO NOT snap — let MoveTo take
+            -- the humanoid the final studs so visually it just walks
+            -- onto the coin. Park still runs so server has time to
+            -- register pickup, but position isn't yanked.
+            if not CONFIG.HUMANIZED and CONFIG.SNAP_ON_REACH then
+                safeMove(hrp, coinPos)
+            end
             parkedCoin  = coin
             parkedUntil = os.clock() + CONFIG.TIME_ON_COIN
+            -- Keep humanoid moving toward coin while parked so the
+            -- character doesn't stop short with visible gap
+            if CONFIG.HUMANIZED then
+                hum:MoveTo(Vector3.new(coinPos.X, hrp.Position.Y, coinPos.Z))
+            else
+                bv.Velocity = Vector3.zero
+            end
             return
         end
     end
