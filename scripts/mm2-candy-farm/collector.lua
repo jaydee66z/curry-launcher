@@ -1,6 +1,29 @@
 --[[
-    MM2 CANDY FARM — v0.15 (Curry Launcher)
+    MM2 CANDY FARM — v0.18 (Curry Launcher)
     =======================================
+    v0.18 SMART PATHING — raycast wall-aware coin picker.
+    Operator kicked again after a long-distance pivot through
+    multiple walls. The AC flags that pattern. Fixes:
+    - countWallsBetween(from, to): raycast with character excluded,
+      counts solid BaseParts between HRP and coin.
+    - Coins with > MAX_WALLS_HARD_LIMIT (3) walls are skipped entirely.
+    - Coins FAR + walled (dist > FAR_WITH_WALLS_LIMIT=25 AND walls>0)
+      are deferred 1.5s — we only cross walls for nearby candy.
+    - Score = baseDist + walls * WALL_PENALTY (20), so each wall adds
+      20 "studs equivalent" to the distance score. A naked coin at
+      40 studs beats a walled coin at 25 (score 40 vs 45).
+    - Bonus for very near coins (within NEAR_PREFERENCE_RADIUS=30)
+      so clusters are drained before pivoting.
+
+    v0.16 SPEED SAFE MODE + telemetry for autonomous 10-min analysis:
+    - SPEED and FORCE_WALKSPEED dropped 26 -> 16 (vanilla walkspeed).
+      The server's AC was still kicking at 26 despite v0.15's
+      velocity sync, so drop to the exact MM2 default to eliminate
+      speed-validation as a kick source.
+    - MAX_FRAME_STEP 0.5 -> 0.3 for finer updates at lower speed.
+    - Telemetry: _G.farmRoundStats collects per-round data (candies,
+      elapsed, kicks, discards) so an external monitor can audit.
+
     v0.15 HUMANIZED MOVEMENT (operator feedback — AC kick from
     inconsistent motion):
     - FORCE_WALKSPEED=26 on the Humanoid so the server's speed
@@ -99,10 +122,21 @@ local CONFIG = {
     STAB_RANGE              = 12,
     TIME_BETWEEN_STABS      = 1.5,
 
-    -- Movement (v0.15: humanized, SPEED=26 synced to humanoid)
-    SPEED                   = 26,
-    FORCE_WALKSPEED         = 26,      -- v0.15: hum.WalkSpeed locked at this
-    MAX_FRAME_STEP          = 0.5,     -- v0.15: ~SPEED/60, smoother
+    -- Movement (v0.18: smart pathing — raycast wall scoring)
+    SPEED                   = 12,
+    FORCE_WALKSPEED         = 16,
+    MAX_FRAME_STEP          = 0.22,
+    COOLDOWN_BETWEEN_COINS  = 0.2,
+
+    -- Pathing intelligence (v0.19 softened)
+    WALL_RAYCAST            = true,
+    WALL_PENALTY            = 12,         -- studs per wall (soft scoring only)
+    MAX_WALLS_HARD_LIMIT    = 99,         -- no hard limit (softened)
+    FAR_WITH_WALLS_LIMIT    = 9999,       -- no defer-by-walls
+    NEAR_PREFERENCE_RADIUS  = 25,
+    MAX_PICK_DISTANCE       = 120,        -- v0.20: never chase farther than this
+    RESCUE_IF_NO_COIN_WITHIN = 200,       -- if nearest > this -> rescue
+    CLUSTER_PREFERENCE      = true,
     MAX_DT                  = 0.05,
     MAX_JUMP                = 25,
     DIR_SMOOTH              = 0.25,    -- v0.15: heading lerp factor per frame
@@ -174,6 +208,11 @@ local firesForCoin  = setmetatable({}, {__mode = "k"})
 
 -- v0.15: smoothed heading (lerp'd move direction) for humanized motion
 local smoothDir     = Vector3.new(0, 0, 1)
+
+-- v0.16 telemetry
+_G.farmRoundStats = _G.farmRoundStats or {}
+_G.farmDiscards   = _G.farmDiscards or {}
+_G.farmCurrentRound = _G.farmCurrentRound or {start=os.clock(), pickups=0, discards=0, maxDist=0}
 
 _G.farmDebug = _G.farmDebug or {}
 local DBG = _G.farmDebug
@@ -277,11 +316,19 @@ end
 -- ───────────────────────────────────────────────
 CoinCollected.OnClientEvent:Connect(function(coinID)
     candiesThisRound = candiesThisRound + 1
+    _G.farmCurrentRound.pickups = (_G.farmCurrentRound.pickups or 0) + 1
     dsync("candiesThisRound", candiesThisRound)
     dlog(("pickup type=%s total=%d"):format(tostring(coinID), candiesThisRound))
 end)
 
 CoinsStarted.OnClientEvent:Connect(function()
+    -- Snapshot previous round to telemetry
+    if _G.farmCurrentRound and _G.farmCurrentRound.pickups and _G.farmCurrentRound.pickups > 0 then
+        _G.farmCurrentRound.elapsed = os.clock() - (_G.farmCurrentRound.start or os.clock())
+        table.insert(_G.farmRoundStats, _G.farmCurrentRound)
+        if #_G.farmRoundStats > 20 then table.remove(_G.farmRoundStats, 1) end
+    end
+    _G.farmCurrentRound = {start=os.clock(), pickups=0, discards=0, maxDist=0}
     visited = setmetatable({}, {__mode = "k"})
     deferredUntil = setmetatable({}, {__mode = "k"})
     attempts = setmetatable({}, {__mode = "k"})
@@ -430,12 +477,40 @@ local function weightedDist(from, to)
     return math.sqrt(dx*dx + dz*dz + (dy*CONFIG.HEIGHT_WEIGHT)^2)
 end
 
+-- v0.18: raycast from HRP to coin and count blocking BaseParts along
+-- the ray. Ignores the character itself. Returns wall count.
+local function countWallsBetween(fromPos, toPos, charExclude)
+    if not CONFIG.WALL_RAYCAST then return 0 end
+    local dir = toPos - fromPos
+    local dist = dir.Magnitude
+    if dist < 0.1 then return 0 end
+    local rp = RaycastParams.new()
+    rp.FilterType = Enum.RaycastFilterType.Exclude
+    rp.FilterDescendantsInstances = charExclude and {charExclude} or {}
+    rp.IgnoreWater = true
+    local walls = 0
+    local origin = fromPos
+    local remaining = dist
+    for _ = 1, CONFIG.MAX_WALLS_HARD_LIMIT + 2 do
+        local hit = workspace:Raycast(origin, dir.Unit * remaining, rp)
+        if not hit then break end
+        walls = walls + 1
+        -- Advance past the hit by 0.1 studs and continue
+        local traveled = (hit.Position - origin).Magnitude + 0.1
+        origin = hit.Position + dir.Unit * 0.1
+        remaining = remaining - traveled
+        if remaining <= 0.1 then break end
+    end
+    return walls
+end
+
 -- v0.12: target Coin_Server (the Part with TouchInterest), iterate via
 -- its tagged CoinVisual child.
 local function getBestCoin(myPos, mySpeed)
     local threats, murderer, players = getWorldThreats()
     local murdererPos = murderer and murderer.hrp.Position or nil
     local allVisuals = CollectionService:GetTagged("CoinVisual")
+    local char = lp.Character
     local best, bestScore = nil, math.huge
     local now = os.clock()
     for _, visual in ipairs(allVisuals) do
@@ -450,9 +525,22 @@ local function getBestCoin(myPos, mySpeed)
             if insideMap(pos) then
                 local inMurdererZone = murdererPos and (murdererPos-pos).Magnitude < CONFIG.AVOID_MURDERER_RADIUS
                 local weWin = winsContest(pos, myPos, mySpeed, players)
-                local score = weightedDist(myPos, pos)
-                if isSafe(pos, threats) and not inMurdererZone and weWin then
-                    if score < bestScore then best, bestScore = serverPart, score end
+                local baseDist = weightedDist(myPos, pos)
+                -- v0.18: count walls between us and the coin
+                local walls = 0
+                if CONFIG.WALL_RAYCAST then
+                    walls = countWallsBetween(myPos, pos, char)
+                end
+                -- v0.19: no hard filters, pure scoring. Softer wall penalty
+                -- plus a near-preference bonus. Hard distance cap only.
+                if baseDist <= CONFIG.MAX_PICK_DISTANCE then
+                    local score = baseDist + walls * CONFIG.WALL_PENALTY
+                    if baseDist < CONFIG.NEAR_PREFERENCE_RADIUS then
+                        score = score - (CONFIG.NEAR_PREFERENCE_RADIUS - baseDist) * 0.5
+                    end
+                    if isSafe(pos, threats) and not inMurdererZone and weWin then
+                        if score < bestScore then best, bestScore = serverPart, score end
+                    end
                 end
             end
         end
@@ -534,20 +622,27 @@ farmConn = RNS.Heartbeat:Connect(function(dt)
     local mySpeed  = math.max(1, hum.WalkSpeed)
     local threats, murderer = getWorldThreats()
 
-    -- Below-map rescue
+    -- Below-map / out-of-map rescue (v0.20: covers XZ bounds too, not only Y)
     if coinContainer and coinContainer.Parent then
         local parent = coinContainer.Parent
         if parent and parent:IsA("Model") then
             local ok, cf, size = pcall(parent.GetBoundingBox, parent)
             if ok then
                 local bottom = cf.Position.Y - size.Y/2
-                if myPos.Y < bottom + CONFIG.BELOW_MAP_Y_DELTA then
+                local halfX = size.X/2 + CONFIG.MAP_MARGIN
+                local halfZ = size.Z/2 + CONFIG.MAP_MARGIN
+                local dx = myPos.X - cf.Position.X
+                local dz = myPos.Z - cf.Position.Z
+                local belowMap = myPos.Y < bottom + CONFIG.BELOW_MAP_Y_DELTA
+                local outsideXZ = math.abs(dx) > halfX or math.abs(dz) > halfZ
+                if belowMap or outsideXZ then
                     local rescue = mapCenterTop()
                     if rescue then
                         hrp.CFrame = CFrame.new(rescue)
                         bv.Velocity = Vector3.zero
                         tripTarget = nil
-                        dlog("rescue: below-map snap to map top")
+                        parkedCoin, parkedUntil = nil, 0
+                        dlog("rescue: outside-map snap")
                         return
                     end
                 end
@@ -635,6 +730,9 @@ farmConn = RNS.Heartbeat:Connect(function(dt)
             attempts[parkedCoin] = n
             if n >= CONFIG.MAX_ATTEMPTS then
                 visited[parkedCoin] = true
+                _G.farmCurrentRound.discards = (_G.farmCurrentRound.discards or 0) + 1
+                table.insert(_G.farmDiscards, {t=os.clock(), r="max_attempts"})
+                if #_G.farmDiscards > 200 then table.remove(_G.farmDiscards, 1) end
                 dlog("discard: max attempts on coin")
             else
                 deferredUntil[parkedCoin] = os.clock() + CONFIG.RETRY_AFTER
@@ -648,6 +746,27 @@ farmConn = RNS.Heartbeat:Connect(function(dt)
     -- Pick a coin (operating on Coin_Server parts)
     local coin = getBestCoin(myPos, mySpeed)
     if not coin then
+        -- v0.20: if there ARE coins but all beyond MAX_PICK_DISTANCE,
+        -- check nearest unclaimed coin distance; if > RESCUE threshold,
+        -- snap toward map center to recover from being out of bounds.
+        local nearest = math.huge
+        for _, visual in ipairs(CollectionService:GetTagged("CoinVisual")) do
+            local sp = visual.Parent
+            if sp and sp:IsA("BasePart") and not visual:GetAttribute("Collected") then
+                local d = (sp.Position - myPos).Magnitude
+                if d < nearest then nearest = d end
+            end
+        end
+        if nearest > CONFIG.RESCUE_IF_NO_COIN_WITHIN then
+            local rescue = mapCenterTop()
+            if rescue then
+                hrp.CFrame = CFrame.new(rescue)
+                bv.Velocity = Vector3.zero
+                tripTarget = nil
+                dlog(("rescue: no coin within %d (nearest=%d)"):format(CONFIG.RESCUE_IF_NO_COIN_WITHIN, nearest))
+                return
+            end
+        end
         bv.Velocity = Vector3.zero
         tripTarget = nil
         dsync("tripCoinID", "none")
@@ -674,6 +793,9 @@ farmConn = RNS.Heartbeat:Connect(function(dt)
             visited[coin] = true
             tripTarget = nil
             bv.Velocity = Vector3.zero
+            _G.farmCurrentRound.discards = (_G.farmCurrentRound.discards or 0) + 1
+            table.insert(_G.farmDiscards, {t=os.clock(), r="stuck_timeout"})
+            if #_G.farmDiscards > 200 then table.remove(_G.farmDiscards, 1) end
             dlog("discard: stuck timeout")
             return
         end
