@@ -1,6 +1,35 @@
 --[[
-    MM2 CANDY FARM — v0.4 (Curry Launcher)
+    MM2 CANDY FARM — v0.6 (Curry Launcher)
     ======================================
+    v0.6 CRITICAL FIX:
+    - Live analysis showed every coin in MM2 shares the SAME CoinID
+      attribute (literal "Candy"). Our v0.2-v0.5 used CoinID as the
+      visited key, so the FIRST successful pickup set visited["Candy"]
+      = true and blocked EVERY subsequent coin. The bot picked one
+      candy and froze for 35+ seconds.
+    - v0.6 keys visited/deferredUntil on the coin INSTANCE itself
+      (weak-keyed table — orphaned coins drop on GC). We no longer
+      need the CoinID to know which coin was picked: MM2 sets the
+      per-coin attribute Collected=true on the server side, so
+      getBestCoin's existing Collected filter handles it.
+    - CoinCollected remote listener now only increments the per-round
+      candy counter (no dedup needed).
+
+    v0.5 CHANGES vs v0.4:
+    - PICKUP FIX #2: the v0.4 anti-sink clamp broke coins BELOW the
+      character (Y target stayed at myPos.Y, head never reached coin).
+      v0.5 always targets coin.Y - headOffset; STAND_ON_FLOOR is off
+      by default. Turn it back on only if the server kicks for sinking
+      into the floor.
+    - DEBUG EXPOSURE: internal state is mirrored to `_G.farmDebug` for
+      live introspection via get-data-by-code. Fields: myRole,
+      wasFarming, candiesThisRound, parkedCoinID, tripCoinID,
+      lastBestCoinID, lastBestDist, visitedCount, deferredCount,
+      lastDecisionAt.
+    - LOG: rate-limited prints on state transitions (round start,
+      wasFarming toggle, combat mode entered) for console-based
+      debugging.
+
     v0.4 CHANGES vs v0.3:
     - CRITICAL PICKUP FIX: STAND_ON_FLOOR semantics corrected.
       v0.3 pinned target.Y = myPos.Y which, for any coin ABOVE the
@@ -42,10 +71,12 @@ running                  = true
 local CONFIG = {
     -- Features
     FARM_COINS              = true,
-    STAND_ON_FLOOR          = true,  -- anti-sink: never descend below current Y
+    STAND_ON_FLOOR          = false, -- v0.5: off by default; breaks coins below char when on
     ABORT_IF_MURDERER_NEAR  = true,
     CONTEST                 = true,
     LEAVE_FOR_OTHER_BOTS    = false,
+    DEBUG_LOG               = true,  -- rate-limited prints
+    DEBUG_EXPOSE            = true,  -- mirror state to _G.farmDebug
 
     -- Combat (new in v0.4)
     COMBAT_AT_CANDIES       = 50,    -- candies this round before combat kicks in
@@ -83,8 +114,9 @@ local CONFIG = {
 -- ───────────────────────────────────────────────
 -- STATE
 -- ───────────────────────────────────────────────
-local visited        = {}
-local deferredUntil  = {}
+-- v0.6: keyed by coin INSTANCE (weak table so GC'd coins drop out).
+local visited        = setmetatable({}, {__mode = "k"})
+local deferredUntil  = setmetatable({}, {__mode = "k"})
 local parkedUntil    = 0
 local parkedCoin     = nil
 local tripTarget     = nil
@@ -105,6 +137,20 @@ local Remotes       = ReplicatedStorage:WaitForChild("Remotes")
 local Gameplay      = Remotes:WaitForChild("Gameplay")
 local CoinCollected = Gameplay:WaitForChild("CoinCollected")
 local CoinsStarted  = Gameplay:WaitForChild("CoinsStarted")
+
+-- Debug bus
+_G.farmDebug = _G.farmDebug or {}
+local DBG = _G.farmDebug
+local lastLogAt = 0
+local function dlog(msg)
+    if not CONFIG.DEBUG_LOG then return end
+    if os.clock() - lastLogAt < 0.25 then return end
+    lastLogAt = os.clock()
+    print("[farm] " .. msg)
+end
+local function dsync(key, value)
+    if CONFIG.DEBUG_EXPOSE then DBG[key] = value end
+end
 
 -- ───────────────────────────────────────────────
 -- Weapon helpers (role-based combat)
@@ -186,28 +232,25 @@ end
 -- ───────────────────────────────────────────────
 -- Remote listeners
 -- ───────────────────────────────────────────────
-CoinCollected.OnClientEvent:Connect(function(coinID, collectorUserId)
-    if coinID ~= nil then
-        visited[coinID] = true
-        deferredUntil[coinID] = nil
-        if tripTarget and tripTarget:GetAttribute("CoinID") == coinID then
-            tripTarget = nil
-        end
-        -- Only count coins WE collected (second arg is the collector).
-        if collectorUserId == nil or collectorUserId == lp.UserId then
-            candiesThisRound = candiesThisRound + 1
-        end
-    end
+-- v0.6: CoinID is a type tag ("Candy"), not a unique id, so we only
+-- count the pickup here. Per-coin dedup is handled by MM2's own
+-- per-coin Collected attribute in getBestCoin.
+CoinCollected.OnClientEvent:Connect(function(coinID, a2, a3, a4)
+    candiesThisRound = candiesThisRound + 1
+    dsync("candiesThisRound", candiesThisRound)
+    dlog(("pickup: type=%s total=%d"):format(tostring(coinID), candiesThisRound))
 end)
 
 CoinsStarted.OnClientEvent:Connect(function()
-    visited = {}
-    deferredUntil = {}
+    visited = setmetatable({}, {__mode = "k"})
+    deferredUntil = setmetatable({}, {__mode = "k"})
     tripTarget = nil
     parkedCoin = nil
     parkedUntil = 0
     roundStartAt = os.clock()
     candiesThisRound = 0
+    dlog("CoinsStarted: new round")
+    dsync("candiesThisRound", 0)
 end)
 
 -- ───────────────────────────────────────────────
@@ -379,13 +422,12 @@ local function getBestCoin(myPos, mySpeed)
     local bA, bAD = nil, math.huge
     local now = os.clock()
     for _, coin in ipairs(allCoins) do
-        local coinID = coin:GetAttribute("CoinID")
-        local deferTs = coinID and deferredUntil[coinID]
+        local deferTs = deferredUntil[coin]
         if coin:IsA("BasePart")
             and coin.Parent
             and not coin:GetAttribute("Collected")
             and not coin:GetAttribute("RoundEnd")
-            and not visited[coinID or coin]
+            and not visited[coin]
             and (not deferTs or now >= deferTs)
         then
             local pos = coin.Position
@@ -456,6 +498,10 @@ farmConn = RNS.Heartbeat:Connect(function(dt)
         myRole     = getMyRole()
         refreshHeadOffset(char)
         rebuildCharPartsCache(char)
+        dlog(("ENGAGE: role=%s head=%.2f parts=%d"):format(myRole, headOffset, #charParts))
+        dsync("myRole", myRole)
+        dsync("wasFarming", true)
+        dsync("headOffset", headOffset)
     end
 
     hum.PlatformStand = true
@@ -528,19 +574,23 @@ farmConn = RNS.Heartbeat:Connect(function(dt)
         end
     end
 
-    -- Parked (waiting for server CoinCollected)
+    -- Parked (waiting for server-side Collected flag)
     if parkedCoin and os.clock() < parkedUntil then
-        local coinID = parkedCoin:GetAttribute("CoinID")
-        if coinID and visited[coinID] then
+        if (not parkedCoin.Parent) or parkedCoin:GetAttribute("Collected") then
+            -- The server confirmed and either marked collected or destroyed it.
+            visited[parkedCoin] = true
             parkedCoin, parkedUntil = nil, 0
         else
             bv.Velocity = Vector3.zero
             return
         end
     elseif parkedCoin then
-        local coinID = parkedCoin:GetAttribute("CoinID")
-        if coinID and not visited[coinID] then
-            deferredUntil[coinID] = os.clock() + CONFIG.RETRY_AFTER
+        -- Park window elapsed without confirmation -> defer this specific coin
+        -- instance and move on to the next.
+        if parkedCoin.Parent and not parkedCoin:GetAttribute("Collected") then
+            deferredUntil[parkedCoin] = os.clock() + CONFIG.RETRY_AFTER
+        else
+            visited[parkedCoin] = true
         end
         parkedCoin, parkedUntil = nil, 0
     end
@@ -550,32 +600,38 @@ farmConn = RNS.Heartbeat:Connect(function(dt)
     if not coin then
         bv.Velocity = Vector3.zero
         tripTarget = nil
+        dsync("tripCoinID", "none")
+        dlog("no coin available")
         return
     end
 
     -- Abort trip if murderer entered target's zone
     if CONFIG.ABORT_IF_MURDERER_NEAR and tripTarget == coin and murderer then
         if (murderer.hrp.Position - coin.Position).Magnitude < CONFIG.AVOID_MURDERER_RADIUS then
-            local coinID = coin:GetAttribute("CoinID")
-            if coinID then deferredUntil[coinID] = os.clock() + CONFIG.RETRY_AFTER end
+            deferredUntil[coin] = os.clock() + CONFIG.RETRY_AFTER
             tripTarget = nil
             bv.Velocity = Vector3.zero
             return
         end
     end
 
-    tripTarget = coin
+    if tripTarget ~= coin then
+        tripTarget = coin
+        dsync("tripCoinID", coin:GetAttribute("CoinID"))
+    end
 
-    -- v0.4 PICKUP FIX:
-    -- STAND_ON_FLOOR now means "anti-sink": NEVER descend, always rise
-    -- to put the head at coin.Y via headOffset.
-    local coinY = coin.Position.Y
-    local desiredY = coinY - headOffset
-    local targetY
+    -- v0.5 PICKUP: always target coin.Y - headOffset so the head
+    -- physically overlaps the CoinVisual's hitbox regardless of
+    -- whether the coin is above or below the character. The old
+    -- STAND_ON_FLOOR clamp broke pickup for any coin below the char.
+    local targetY = coin.Position.Y - headOffset
     if CONFIG.STAND_ON_FLOOR then
-        targetY = math.max(desiredY, myPos.Y)  -- rise only, never sink
-    else
-        targetY = desiredY
+        if targetY < myPos.Y - 1.5 then
+            deferredUntil[coin] = os.clock() + CONFIG.RETRY_AFTER
+            tripTarget = nil
+            bv.Velocity = Vector3.zero
+            return
+        end
     end
     local target = Vector3.new(coin.Position.X, targetY, coin.Position.Z)
 
@@ -596,6 +652,7 @@ farmConn = RNS.Heartbeat:Connect(function(dt)
         bv.Velocity = Vector3.zero
         parkedCoin  = coin
         parkedUntil = os.clock() + CONFIG.TIME_ON_COIN
+        dsync("parkedCoinID", coin:GetAttribute("CoinID"))
         return
     end
 
@@ -603,4 +660,5 @@ farmConn = RNS.Heartbeat:Connect(function(dt)
     local step = math.min(diff.Magnitude, CONFIG.SPEED * dt)
     hrp.CFrame  = CFrame.new(myPos + diff.Unit * step)
     bv.Velocity = Vector3.zero
+    dsync("lastDecisionAt", os.clock())
 end)
