@@ -238,11 +238,12 @@ local CONFIG = {
     BOX_BUY_THRESHOLD       = 600,
     BOX_NAME                = "Halloween2026Box",
 
-    -- v0.45 Discord webhook on rare pull from Halloween2026Box.
-    -- Internal names found live in ProfileData.Weapons.Owned:
-    --   Embersickle        = Godly (common variant)
-    --   EmbersickleChroma  = Godly + Chroma=true
-    WEBHOOK_URL             = "PASTE_YOUR_DISCORD_WEBHOOK_HERE",
+    -- v0.46 Discord webhook on rare pull from Halloween2026Box.
+    -- URL is loaded from scripts/mm2-candy-farm/webhook.local.lua
+    -- (gitignored). If the executor pushes the file via loadfile or
+    -- the operator pre-ran that file so _G.farmWebhookUrl is set, we
+    -- pick it up; otherwise WEBHOOK_URL falls back to env / placeholder.
+    WEBHOOK_URL             = (_G.farmWebhookUrl or ""),
     NOTIFY_ITEMS            = {
         ["Embersickle"]       = "common",
         ["EmbersickleChroma"] = "chroma",

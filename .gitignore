@@ -42,3 +42,7 @@ Thumbs.db
 # === Obsidian workspace state (keep config, drop user-local state) ===
 docs/obsidian/.obsidian/workspace.json
 docs/obsidian/.obsidian/workspace-mobile.json
+
+# Local webhook URL (Discord notifications) — NEVER commit
+scripts/mm2-candy-farm/webhook.local.lua
+scripts/mm2-candy-farm/*.local.lua
