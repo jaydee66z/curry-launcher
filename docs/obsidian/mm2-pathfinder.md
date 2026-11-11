@@ -64,18 +64,29 @@ pero propio para control fino:
 Esto mataría los "wall-crosses visibles" y haría el movimiento lucir
 natural aun sin HUMANIZED, siguiendo rutas por pasillos.
 
-## Mapas conocidos (observados en vivo)
+## Mapas capturados (2026-11-10, rotación estándar)
 
-| Mapa | bbox center | bbox size | notas |
-|------|-------------|-----------|-------|
-| Manor | (-1, 300, 9000) | 317 x 80 x 344 | techo alto, candies en mesas |
-| VampireCastle | (?, 300, ?) | ~300 | 3493 parts, candies en salones |
-| Barn (Farmhouse) | (0, 300, 9000) | 955 x 354 x 1019 | **bug conocido**: bbox muy alto, bot queda en el techo. zombies |
-| PoliceStation | (0, 900, 3000) | 153 x 125 x 193 | pequeño; Y alto |
-| Hospital3 | ? | ? | lobby con decoración |
+Fase 1 **corriendo en vivo**. 9 mapas en rotación capturados con
+`map_recon.lua` (grid 6 studs, raycast down → walkable Y por celda).
+Full walkable arrays persistidos en el workspace del executor como
+`mm2-maps/<mapName>.json`. Resumen abajo + `mm2-maps/_summary.json`.
 
-Cuando tengamos Fase 1 corriendo, cada entrada arriba se reemplaza por
-el JSON real.
+| Mapa | parts | walkable | bbox size | notas |
+|------|-------|----------|-----------|-------|
+| Farmhouse | 8512 | 4859 | 551 × 310 × 619 | zombies; **bug** piso/techo |
+| Manor | 5418 | 1554 | 317 × 80 × 344 | haunted house clásico |
+| Mansion2 | 2441 | 1554 | 249 × 83 × 227 | compact |
+| VampireCastle | 5125 | 616 | 758 × 249 × 989 | bbox más grande |
+| Spaceship | 6519 | 1370 | 294 × 87 × 343 | sci-fi |
+| MilBase | 3014 | 3973 | 384 × 243 × 554 | outdoor |
+| Mineshaft | 6099 | 801 | 126 × 310 × 340 | vertical / underground |
+| Bank2 | 3663 | 253 | 53 × 117 × 135 | bbox más chico |
+| ResearchFacility | 4200 | 497 | 248 × 43 × 160 | un solo piso |
+
+**Total: 9 mapas** (operador estimó 8-10 — dentro de rango).
+
+Pendiente: event maps de Halloween 2026 si hay rotación especial aún
+activa; se capturarán automáticamente si aparecen.
 
 ## Archivos relacionados
 

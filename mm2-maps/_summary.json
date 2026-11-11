@@ -1,0 +1,18 @@
+{
+  "capturedAt": "2026-11-10",
+  "rotation": "standard (Halloween 2026 event may add more)",
+  "gridStep": 6,
+  "maps": {
+    "Farmhouse":        {"bbox": {"center": [0, 299, 9000], "size": [551, 310, 619]}, "parts": 8512, "walkableCount": 4859, "notes": "zombies rounds; large; floor guard needs per-map tuning"},
+    "Manor":            {"bbox": {"center": [-1, 300, 8999], "size": [317, 80, 344]}, "parts": 5418, "walkableCount": 1554, "notes": "classic haunted house"},
+    "Mansion2":         {"bbox": {"center": [1, 299, 9000], "size": [249, 83, 227]}, "parts": 2441, "walkableCount": 1554, "notes": "compact"},
+    "VampireCastle":    {"bbox": {"center": [0, 300, 9000], "size": [758, 249, 989]}, "parts": 5125, "walkableCount": 616,  "notes": "largest bbox"},
+    "Spaceship":        {"bbox": {"center": [0, 299, 9000], "size": [294, 87, 343]}, "parts": 6519, "walkableCount": 1370, "notes": "sci-fi"},
+    "MilBase":          {"bbox": {"center": [-1, 299, 9000], "size": [384, 243, 554]}, "parts": 3014, "walkableCount": 3973, "notes": "outdoor"},
+    "Mineshaft":        {"bbox": {"center": [-1, 299, 9000], "size": [126, 310, 340]}, "parts": 6099, "walkableCount": 801,  "notes": "vertical / underground"},
+    "Bank2":            {"bbox": {"center": [0, 300, 9000], "size": [53, 117, 135]}, "parts": 3663, "walkableCount": 253,  "notes": "smallest bbox"},
+    "ResearchFacility": {"bbox": {"center": [0, 300, 9000], "size": [248, 43, 160]}, "parts": 4200, "walkableCount": 497,  "notes": "flat / single floor"}
+  },
+  "totalMapsCaptured": 9,
+  "notes": "Walkable cells stored client-side in _G.farmMaps and persisted via executor writefile to its workspace mm2-maps/ folder. This _summary.json is the project-side index."
+}
