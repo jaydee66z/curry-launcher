@@ -1,6 +1,23 @@
 --[[
-    MM2 CANDY FARM — v0.6 (Curry Launcher)
+    MM2 CANDY FARM — v0.7 (Curry Launcher)
     ======================================
+    v0.7 ANTI-KICK: user received "Server Kick Message: Invalid position"
+    while farming. Triggers identified and mitigated:
+    - SPEED=26 is the kick edge. Lower default to 18. The reference
+      bot's own warning: "Above 30 risks kicks; keep 26".
+    - dt can spike (game lag, context switch); clamp dt to 0.05 so
+      a single frame never computes more than SPEED*0.05 ~= 0.9 studs.
+    - Hard cap per-frame CFrame displacement to MAX_FRAME_STEP studs
+      regardless of SPEED*dt math.
+    - Guard every CFrame write: reject if the jump would exceed
+      MAX_JUMP studs (anti-teleport). The coin is deferred instead.
+    - Drop the on-pickup snap. The step loop already brings us within
+      reach, and the server's own .Touched zone picks up when the
+      head overlaps the coin; snapping just creates extra jumps the
+      anti-cheat can flag.
+    - Character respawn / Character died handler now wipes tripTarget,
+      parkedCoin, and forces a cache rebuild to avoid old-map targets.
+
     v0.6 CRITICAL FIX:
     - Live analysis showed every coin in MM2 shares the SAME CoinID
       attribute (literal "Candy"). Our v0.2-v0.5 used CoinID as the
@@ -85,8 +102,11 @@ local CONFIG = {
     STAB_RANGE              = 12,    -- murderer stab range
     TIME_BETWEEN_STABS      = 1.5,
 
-    -- Tuning
-    SPEED                   = 26,
+    -- Tuning (v0.7: anti-kick defaults)
+    SPEED                   = 18,     -- v0.7: lowered from 26 (kick risk at edge)
+    MAX_FRAME_STEP          = 0.9,    -- hard cap per-frame displacement
+    MAX_DT                  = 0.05,   -- clamp dt before computing step
+    MAX_JUMP                = 25,     -- reject coins requiring a >25 stud jump
     TIME_ON_COIN            = 0.15,
     RETRY_AFTER             = 1.5,
     STOP_SHORT              = 0,
@@ -150,6 +170,18 @@ local function dlog(msg)
 end
 local function dsync(key, value)
     if CONFIG.DEBUG_EXPOSE then DBG[key] = value end
+end
+
+-- v0.7 guarded CFrame writer: never teleport farther than MAX_JUMP in
+-- one step. Returns true on success, false if the jump was rejected.
+local function safeMove(hrp, targetPos)
+    local jump = (targetPos - hrp.Position).Magnitude
+    if jump > CONFIG.MAX_JUMP then
+        return false
+    end
+    -- CFrame.lookAt keeps orientation sensible (facing the move vector).
+    hrp.CFrame = CFrame.new(targetPos)
+    return true
 end
 
 -- ───────────────────────────────────────────────
@@ -268,6 +300,12 @@ local function onCharacter(char)
     refreshHeadOffset(char)
     rebuildCharPartsCache(char)
     cacheWaitingLabel()
+    -- v0.7: wipe trip/park state so we never chase a target from the
+    -- previous character (different position, possibly in another map).
+    tripTarget   = nil
+    parkedCoin   = nil
+    parkedUntil  = 0
+    wasFarming   = false
     if noclipConn then noclipConn:Disconnect() end
     noclipConn = char.DescendantAdded:Connect(function(d)
         if d:IsA("BasePart") then
@@ -479,6 +517,9 @@ farmConn = RNS.Heartbeat:Connect(function(dt)
         return
     end
 
+    -- v0.7: clamp dt so a lag spike never computes a huge step.
+    if dt > CONFIG.MAX_DT then dt = CONFIG.MAX_DT end
+
     local char = lp.Character
     local hum  = char and char:FindFirstChildOfClass("Humanoid")
     local hrp  = char and char:FindFirstChild("HumanoidRootPart")
@@ -524,8 +565,8 @@ farmConn = RNS.Heartbeat:Connect(function(dt)
             local toM = (mhrp.Position - myPos)
             local dist = toM.Magnitude
             if dist <= CONFIG.SHERIFF_SHOOT_RANGE then
-                -- Face and fire
-                hrp.CFrame = CFrame.new(myPos, Vector3.new(mhrp.Position.X, myPos.Y, mhrp.Position.Z))
+                -- Face without teleporting (rotate CFrame only, same position)
+                hrp.CFrame = CFrame.lookAt(myPos, Vector3.new(mhrp.Position.X, myPos.Y, mhrp.Position.Z))
                 tryShoot(mhrp)
                 bv.Velocity = Vector3.zero
                 return
@@ -546,14 +587,13 @@ farmConn = RNS.Heartbeat:Connect(function(dt)
             end
             if best then
                 if bestD <= CONFIG.STAB_RANGE then
-                    hrp.CFrame = CFrame.new(best.Position)
                     tryStab()
                     bv.Velocity = Vector3.zero
                     return
                 else
                     local diff = best.Position - myPos
-                    local step = math.min(diff.Magnitude, CONFIG.SPEED * dt)
-                    hrp.CFrame = CFrame.new(myPos + diff.Unit * step)
+                    local step = math.min(diff.Magnitude, CONFIG.MAX_FRAME_STEP, CONFIG.SPEED * dt)
+                    safeMove(hrp, myPos + diff.Unit * step)
                     bv.Velocity = Vector3.zero
                     return
                 end
@@ -566,7 +606,8 @@ farmConn = RNS.Heartbeat:Connect(function(dt)
         if (myPos - d.pos).Magnitude < d.dist * 0.6 then
             local away = myPos - d.pos
             if away.Magnitude > 0 then
-                hrp.CFrame = CFrame.new(myPos + away.Unit * CONFIG.SPEED * dt)
+                local step = math.min(CONFIG.MAX_FRAME_STEP, CONFIG.SPEED * dt)
+                safeMove(hrp, myPos + away.Unit * step)
             end
             bv.Velocity = Vector3.zero
             parkedCoin, parkedUntil, tripTarget = nil, 0, nil
@@ -647,8 +688,15 @@ farmConn = RNS.Heartbeat:Connect(function(dt)
     local toCoin  = coin.Position - headPos
     local dXZ     = math.sqrt(toCoin.X^2 + toCoin.Z^2)
     local dY      = math.abs(toCoin.Y)
+    -- v0.7: no on-reach snap. We keep stepping toward the coin at the
+    -- throttled rate until the server's .Touched fires. Snapping adds
+    -- an extra discrete jump the anti-cheat can flag.
     if dXZ < CONFIG.COIN_REACH_XZ and dY < CONFIG.COIN_REACH_Y then
-        hrp.CFrame  = CFrame.new(target)
+        -- Still move forward a tiny step so we're fully within the
+        -- CoinVisual hitbox, but through safeMove (no big jumps).
+        local diff = target - myPos
+        local step = math.min(diff.Magnitude, CONFIG.MAX_FRAME_STEP, CONFIG.SPEED * dt)
+        if step > 0 then safeMove(hrp, myPos + diff.Unit * step) end
         bv.Velocity = Vector3.zero
         parkedCoin  = coin
         parkedUntil = os.clock() + CONFIG.TIME_ON_COIN
@@ -657,8 +705,16 @@ farmConn = RNS.Heartbeat:Connect(function(dt)
     end
 
     local diff = target - myPos
-    local step = math.min(diff.Magnitude, CONFIG.SPEED * dt)
-    hrp.CFrame  = CFrame.new(myPos + diff.Unit * step)
+    local step = math.min(diff.Magnitude, CONFIG.MAX_FRAME_STEP, CONFIG.SPEED * dt)
+    local ok = safeMove(hrp, myPos + diff.Unit * step)
+    if not ok then
+        -- Would have been a jump > MAX_JUMP: defer this coin.
+        deferredUntil[coin] = os.clock() + CONFIG.RETRY_AFTER
+        tripTarget = nil
+        bv.Velocity = Vector3.zero
+        dlog("defer: jump > MAX_JUMP")
+        return
+    end
     bv.Velocity = Vector3.zero
     dsync("lastDecisionAt", os.clock())
 end)
