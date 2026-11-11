@@ -49,6 +49,10 @@ def main() -> int:
             if name == 'connect':
                 destination.add_argument('--brainrot', action='store_true',
                     help='Compact overhead scanner in place 109983668079237; requires --mass-cookie-file COUNT')
+            destination.add_argument('--mm2', action='store_true',
+                help='Run MM2 pure-Python farm (place 142823291); uses GetCoin + OpenCrate remotes; requires --mass-cookie-file COUNT')
+            destination.add_argument('--mm2-dry-run', action='store_true',
+                help='With --mm2, log payloads without sending (zero AC risk)')
             auth.add_argument("--attempts", type=int, default=3)
         if name == "connect":
             auth.add_argument('--only-best', action='store_true',

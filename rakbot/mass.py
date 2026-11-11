@@ -429,7 +429,10 @@ def run_mass(args):
         else:
             runner = MassRunner(credentials, place_id=args.place_id, attempts=args.attempts,
                             vip_link=args.vip_link, duration=args.duration, emit=console.emit,
-                            emit_batch=console.emit_many, brainrot=brainrot, only_best=getattr(args, 'only_best', False))
+                            emit_batch=console.emit_many, brainrot=brainrot,
+                            only_best=getattr(args, 'only_best', False),
+                            mm2=getattr(args, 'mm2', False),
+                            mm2_dry_run=getattr(args, 'mm2_dry_run', False))
         if not brainrot:
             console.emit(f'mass: selected {len(credentials)} accounts; help, accounts; @3 command; quit stops all')
         runner.run(console.commands)
