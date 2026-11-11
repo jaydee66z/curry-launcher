@@ -1,6 +1,18 @@
 --[[
-    MM2 CANDY FARM — v0.29 (Curry Launcher)
+    MM2 CANDY FARM — v0.30 (Curry Launcher)
     =======================================
+    v0.30 VISUAL-ONLY HIDE + STALL WATCHDOG:
+    - Removed the v0.25 "noclip entire map" behavior. That's what
+      caused the fall-at-round-start: when every map part became
+      CanCollide=false the character had nothing to stand on and
+      dropped through the floor.
+    - Replaced with hideMapVisual(): sets Transparency=1 and
+      CastShadow=false on map parts (collision preserved). Saves
+      GPU/CPU without breaking floor support.
+    - Stall watchdog: if _G.farmLifetimeCandies doesn't increase
+      for STALL_NO_PICKUP_WINDOW (150s) while farming, teleport to
+      a fresh server instance automatically.
+
     v0.29 ANTI-VOID-FALL AT ROUND START:
     - Floor-raycast guard before every humanized move: if no floor
       within 15 studs below HRP, force +SPEED Y velocity to rise
@@ -221,6 +233,10 @@ local CONFIG = {
     -- v0.24: auto-rejoin on kick / disconnect prompt
     AUTO_REJOIN             = true,
     REJOIN_POLL_INTERVAL    = 1.0,
+
+    -- v0.30: stall watchdog — teleport to new server if no progress
+    STALL_WATCHDOG          = true,
+    STALL_NO_PICKUP_WINDOW  = 150,    -- seconds: no pickup in this window = stall
     SHERIFF_SHOOT_RANGE     = 60,
     TIME_BETWEEN_SHOTS      = 3.4,
     STAB_RANGE              = 12,
@@ -437,23 +453,29 @@ CoinCollected.OnClientEvent:Connect(function(coinID)
     dlog(("pickup type=%s round=%d life=%d"):format(tostring(coinID), candiesThisRound, _G.farmLifetimeCandies))
 end)
 
--- v0.25: strip every collision in the current map model on round start.
--- "Eliminate" per operator means: nothing in the map blocks movement.
--- We don't Destroy parts (that breaks game logic), just set CanCollide
--- =false + CanTouch=true on every BasePart in the map's root Model.
-local function noclipEntireMap()
+-- v0.30: VISUAL-ONLY hide (CPU savings) — invisible walls/furniture
+-- but COLLISION PRESERVED so the character stands on the floor
+-- normally. Fixes the "fall at round start" from v0.25-v0.29 where
+-- making every map part CanCollide=false removed anything to stand on.
+-- Excludes the coin parts themselves and anything tagged as a coin.
+local function hideMapVisual()
     cacheCoinContainer()
     if not coinContainer then return 0 end
     local root = coinContainer.Parent
     if not root then return 0 end
     local count = 0
     for _, p in ipairs(root:GetDescendants()) do
-        if p:IsA("BasePart") and p.CanCollide then
-            p.CanCollide = false
-            count = count + 1
+        if p:IsA("BasePart") and not p:IsDescendantOf(coinContainer) then
+            -- Skip anything with the CoinVisual tag or named Coin_*
+            local name = p.Name
+            if not (name:find("Coin") or name:find("Candy")) then
+                if p.Transparency < 1 then p.Transparency = 1 end
+                if p.CastShadow then p.CastShadow = false end
+                count = count + 1
+            end
         end
     end
-    dlog(("map noclip applied: %d parts"):format(count))
+    dlog(("map visual-hide applied: %d parts"):format(count))
     return count
 end
 
@@ -473,11 +495,12 @@ CoinsStarted.OnClientEvent:Connect(function()
     roundStartAt = os.clock()
     candiesThisRound = 0
     dsync("candiesThisRound", 0)
-    -- v0.25: strip the whole map's collision so nothing can wedge us
+    -- v0.30: visual-only hide (no collision changes) for CPU savings.
+    -- Collision stays intact so character has a floor to stand on.
     task.spawn(function()
-        task.wait(0.8)  -- let map load fully
-        local n = noclipEntireMap()
-        dsync("mapNoclipParts", n)
+        task.wait(0.8)
+        local n = hideMapVisual()
+        dsync("mapHiddenParts", n)
     end)
     dlog("CoinsStarted: new round")
 end)
@@ -562,6 +585,34 @@ if CONFIG.AUTO_REJOIN then
                 end
             end
             task.wait(CONFIG.REJOIN_POLL_INTERVAL)
+        end
+    end)
+end
+
+-- ───────────────────────────────────────────────
+-- v0.30: stall watchdog — if no pickup in STALL_NO_PICKUP_WINDOW
+-- seconds while farming, teleport to a fresh server (instance).
+-- ───────────────────────────────────────────────
+if CONFIG.STALL_WATCHDOG then
+    task.spawn(function()
+        local TeleportService = game:GetService("TeleportService")
+        local lastKnownLife = _G.farmLifetimeCandies or 0
+        local lastChangeAt  = os.clock()
+        while running do
+            task.wait(10)
+            local life = _G.farmLifetimeCandies or 0
+            if life > lastKnownLife then
+                lastKnownLife = life
+                lastChangeAt  = os.clock()
+            else
+                local idle = os.clock() - lastChangeAt
+                if idle > CONFIG.STALL_NO_PICKUP_WINDOW then
+                    print(("[farm/stall] %ds without pickup -> teleporting to new server"):format(math.floor(idle)))
+                    pcall(function() TeleportService:Teleport(game.PlaceId, lp) end)
+                    task.wait(15)  -- let teleport process
+                    lastChangeAt = os.clock()
+                end
+            end
         end
     end)
 end
