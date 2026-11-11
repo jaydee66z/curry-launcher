@@ -1,91 +1,177 @@
 --[[
-    MM2 CANDY FARM — Tormenta_2336
-    v0.1 — Curry Launcher MM2 scripts baseline
-    ================================
-    GENERAL LOGIC:
-    The script runs a single Heartbeat every frame (~60fps).
-    Instead of an event-driven state machine, it uses shouldFarm() with three gates.
-    If any gate fails -> Heartbeat does nothing and clears physics if it was farming.
-    If all three pass -> enables noclip, hovers, and flies coin by coin.
+    MM2 CANDY FARM — v0.2 (Tormenta_2336 + Curry Launcher optimizations)
+    ==================================================================
+    v0.2 CHANGES (verified live in MM2 via roblox-mcp):
+    - FIXED: coins are tagged "CoinVisual" (CollectionService); the parent
+      Coin_Server is a Model, not a BasePart — v0.1's `c:IsA("BasePart")`
+      filter rejected every single coin. Now we iterate the tag directly.
+    - FIXED: HEAD_OFFSET is measured dynamically from the live rig instead
+      of hardcoded 1.5 (R15 real offset is ~1.86; R6 is ~1.5).
+    - FIXED: Gate 1 used the literal "waiting for your turn" which does
+      not exist in current MM2. We now check MainGUI.Game.Waiting.Visible
+      directly — O(1) instead of walking 3,600+ TextLabels per frame.
+    - DROPPED: Gate 3 (tool-present). Current MM2 does not give innocents
+      a tool, so the gate falsely blocked. The two surviving gates
+      (not-spectator + coins-exist) are sufficient.
+    - PERF: CoinContainer reference is cached per round and invalidated
+      on CoinsStarted remote fire, instead of walking workspace per frame.
+    - PERF: visited is keyed on CoinID (an attribute) and set the instant
+      the server fires CoinCollected.OnClientEvent — exact, no 0.8s hack.
+    - PERF: applyNoclip runs once on round start; a DescendantAdded
+      listener catches new accessories and sets CanCollide=false on them.
 
-    THREE GATES of shouldFarm():
-      GATE 1: "Waiting for your turn" label visible in PlayerGui -> spectator, never move
-      GATE 2: workspace.<Map>.CoinContainer has children -> an active round has coins
-      GATE 3: The player holds a Tool (character or backpack) -> role has been assigned
-
-    When all three pass, the main loop:
-      - Disables Humanoid physics (PlatformStand = true)
-      - Noclip (CanCollide = false on every BasePart, re-applied every frame)
-      - Anti-gravity via a BodyVelocity (FarmBV) with MaxForce on Y only
-      - Danger evasion (knife carriers, and gun carriers when we are innocent)
-      - Best-coin selection: nearest safe, fallback nearest any
-      - Target Y = coin.Y - HEAD_OFFSET so the head touches the coin (collides), triggering pickup
+    FLOW:
+      - setupNoclip / character handler: hook DescendantAdded per character
+      - cacheCoinContainer: find Workspace.<Map>.CoinContainer once
+      - CoinCollected.OnClientEvent -> visited[coinID] = true
+      - CoinsStarted.OnClientEvent  -> invalidate cache, clear visited
+      - Heartbeat:
+          1. kill switch
+          2. character valid + alive
+          3. Waiting.Visible or no CoinContainer -> stopFarm once, return
+          4. first entry -> detect role, apply noclip, setup hover
+          5. compute threats; if too close, flee
+          6. getBestCoin via CollectionService:GetTagged("CoinVisual")
+          7. target = CoinVisual.Position - headOffset on Y
+          8. snap if within COIN_REACH else step toward it at SPEED
 ]]
 
 running = false
 task.wait(0.5)
 
-local Players = game:GetService("Players")
-local RNS     = game:GetService("RunService")
-local lp      = Players.LocalPlayer
-running       = true
+local Players            = game:GetService("Players")
+local RNS                = game:GetService("RunService")
+local CollectionService  = game:GetService("CollectionService")
+local ReplicatedStorage  = game:GetService("ReplicatedStorage")
+local lp                 = Players.LocalPlayer
+running                  = true
 
 -- ───────────────────────────────────────────────
--- CONFIG — tune these to change behavior
+-- CONFIG
 -- ───────────────────────────────────────────────
-local SPEED        = 26    -- studs/second of movement toward the coin
-local COIN_REACH   = 1.2   -- studs: within this distance the coin is snapped and marked collected
-local HEAD_OFFSET  = 1.5   -- HRP is placed 1.5 studs BELOW the coin so the head (1.5 studs above HRP) touches it
-local MURDER_SAFE  = 35    -- evade murderer at < 35 studs
-local SHERIFF_SAFE = 20    -- evade sheriff (only if we are innocent) at < 20 studs
+local SPEED        = 26
+local COIN_REACH   = 1.2
+local MURDER_SAFE  = 35
+local SHERIFF_SAFE = 20
+-- HEAD_OFFSET is derived dynamically from the live rig (see refreshHeadOffset).
 
 -- ───────────────────────────────────────────────
 -- STATE
 -- ───────────────────────────────────────────────
-local visited    = {}         -- coin -> tick() when marked collected; expires at 0.8s
-local myRole     = "innocent" -- updated by getMyRole() when farming starts
-local wasFarming = false      -- so stopFarm() runs exactly once on farm->idle transition
+local visited     = {}          -- coinID -> true (cleared on CoinsStarted)
+local myRole      = "innocent"
+local wasFarming  = false
+local headOffset  = 1.5         -- fallback for R6; refreshed on each character
+local coinContainer = nil       -- cached Model reference
+local waitingLabel  = nil       -- cached GUI reference
+
+-- Remotes fire fast; keep a ref so we never WaitForChild on hot path.
+local Remotes       = ReplicatedStorage:WaitForChild("Remotes")
+local Gameplay      = Remotes:WaitForChild("Gameplay")
+local CoinCollected = Gameplay:WaitForChild("CoinCollected")
+local CoinsStarted  = Gameplay:WaitForChild("CoinsStarted")
 
 -- ───────────────────────────────────────────────
--- shouldFarm() — the three gates (see header)
+-- CACHING HELPERS
 -- ───────────────────────────────────────────────
-local function shouldFarm()
-    -- GATE 1: Spectator / "Waiting for your turn"
-    for _, v in ipairs(lp.PlayerGui:GetDescendants()) do
-        if v:IsA("TextLabel") and v.Text:lower():find("waiting for your turn") then
-            return false
-        end
-    end
-
-    -- GATE 2: Coins present in the map
-    local hasCoins = false
+local function cacheCoinContainer()
+    coinContainer = nil
     for _, v in ipairs(workspace:GetChildren()) do
         local cc = v:FindFirstChild("CoinContainer")
-        if cc and #cc:GetChildren() > 0 then
-            hasCoins = true
-            break
+        if cc then
+            coinContainer = cc
+            return
         end
     end
-    if not hasCoins then return false end
+end
 
-    -- GATE 3: A Tool exists (role assigned = round active)
-    local char = lp.Character
-    if char then
-        for _, t in ipairs(char:GetChildren()) do
-            if t:IsA("Tool") then return true end
+local function cacheWaitingLabel()
+    local gui = lp:FindFirstChild("PlayerGui")
+    local mainGui = gui and gui:FindFirstChild("MainGUI")
+    local gameFrame = mainGui and mainGui:FindFirstChild("Game")
+    waitingLabel = gameFrame and gameFrame:FindFirstChild("Waiting") or nil
+end
+
+local function refreshHeadOffset(char)
+    local hrp = char:FindFirstChild("HumanoidRootPart")
+    local head = char:FindFirstChild("Head")
+    if hrp and head then
+        local delta = head.Position.Y - hrp.Position.Y
+        if delta > 0 and delta < 5 then
+            headOffset = delta
         end
     end
-    for _, t in ipairs(lp.Backpack:GetChildren()) do
-        if t:IsA("Tool") then return true end
-    end
-
-    return false
 end
 
 -- ───────────────────────────────────────────────
--- getMyRole() — detect current role
+-- Remote listeners
 -- ───────────────────────────────────────────────
--- knife -> murderer, gun/sheriff/revolver -> sheriff, otherwise innocent.
+CoinCollected.OnClientEvent:Connect(function(coinID)
+    -- Marks the specific coin collected the instant the server confirms.
+    if coinID ~= nil then visited[coinID] = true end
+end)
+
+CoinsStarted.OnClientEvent:Connect(function()
+    visited = {}
+    cacheCoinContainer()
+end)
+
+-- ───────────────────────────────────────────────
+-- Character / noclip handler
+-- ───────────────────────────────────────────────
+local noclipConn
+local function applyNoclipOnce(char)
+    for _, p in ipairs(char:GetDescendants()) do
+        if p:IsA("BasePart") then p.CanCollide = false end
+    end
+end
+
+local function restoreCollision(char)
+    for _, p in ipairs(char:GetDescendants()) do
+        if p:IsA("BasePart") then p.CanCollide = true end
+    end
+end
+
+local function onCharacter(char)
+    char:WaitForChild("HumanoidRootPart", 5)
+    refreshHeadOffset(char)
+    cacheWaitingLabel()
+    if noclipConn then noclipConn:Disconnect() end
+    noclipConn = char.DescendantAdded:Connect(function(d)
+        if d:IsA("BasePart") then
+            task.defer(function() if d.Parent then d.CanCollide = false end end)
+        end
+    end)
+end
+
+if lp.Character then onCharacter(lp.Character) end
+lp.CharacterAdded:Connect(onCharacter)
+
+cacheCoinContainer()
+cacheWaitingLabel()
+
+-- ───────────────────────────────────────────────
+-- Gates (now O(1) each)
+-- ───────────────────────────────────────────────
+local function shouldFarm()
+    -- Gate 1: not spectating (Waiting ImageLabel hidden means game active)
+    if waitingLabel == nil then cacheWaitingLabel() end
+    if waitingLabel and waitingLabel.Visible then return false end
+
+    -- Gate 2: active CoinContainer with children
+    if coinContainer == nil or coinContainer.Parent == nil then
+        cacheCoinContainer()
+    end
+    if coinContainer == nil or #coinContainer:GetChildren() == 0 then
+        return false
+    end
+
+    return true
+end
+
+-- ───────────────────────────────────────────────
+-- Role detection (kept for danger evaluation)
+-- ───────────────────────────────────────────────
 local function getMyRole()
     local function scan(container)
         for _, t in ipairs(container:GetChildren()) do
@@ -106,9 +192,8 @@ local function getMyRole()
 end
 
 -- ───────────────────────────────────────────────
--- getDanger() — active threats
+-- Danger (threats) / safe check
 -- ───────────────────────────────────────────────
--- Returns a list of {pos = Vector3, dist = number} for each hostile tool carrier.
 local function getDanger()
     local out = {}
     for _, p in ipairs(Players:GetPlayers()) do
@@ -141,54 +226,37 @@ local function isSafe(pos, danger)
 end
 
 -- ───────────────────────────────────────────────
--- getCoins() — unvisited Coin_Server parts
+-- Coin selection (direct tagged query)
 -- ───────────────────────────────────────────────
-local function getCoins()
-    for _, v in ipairs(workspace:GetChildren()) do
-        local cc = v:FindFirstChild("CoinContainer")
-        if cc then
-            local t = {}
-            for _, c in ipairs(cc:GetChildren()) do
-                if c.Name == "Coin_Server" and c:IsA("BasePart")
-                    and c.Parent and not visited[c] then
-                    t[#t + 1] = c
-                end
-            end
-            return t
-        end
-    end
-    return {}
-end
-
--- ───────────────────────────────────────────────
--- getBestCoin(myPos) — pick a target
--- ───────────────────────────────────────────────
--- Two-pass: prefer nearest safe; fallback to nearest overall.
 local function getBestCoin(myPos)
-    local coins  = getCoins()
     local danger = getDanger()
-
-    local bS, bSD = nil, math.huge -- best safe + dist
-    local bA, bAD = nil, math.huge -- best any  + dist
-
-    for _, c in ipairs(coins) do
-        local tp = Vector3.new(c.Position.X, c.Position.Y - HEAD_OFFSET, c.Position.Z)
-        local d  = (tp - myPos).Magnitude
-        if isSafe(c.Position, danger) then
-            if d < bSD then bS, bSD = c, d end
+    local bS, bSD = nil, math.huge
+    local bA, bAD = nil, math.huge
+    for _, coin in ipairs(CollectionService:GetTagged("CoinVisual")) do
+        local coinID = coin:GetAttribute("CoinID")
+        if coin:IsA("BasePart")
+            and coin.Parent
+            and not coin:GetAttribute("Collected")
+            and not coin:GetAttribute("RoundEnd")
+            and not (coinID and visited[coinID])
+        then
+            local pos = coin.Position
+            local tp  = Vector3.new(pos.X, pos.Y - headOffset, pos.Z)
+            local d   = (tp - myPos).Magnitude
+            if isSafe(pos, danger) then
+                if d < bSD then bS, bSD = coin, d end
+            end
+            if d < bAD then bA, bAD = coin, d end
         end
-        if d < bAD then bA, bAD = c, d end
     end
-
     return bS or bA
 end
 
 -- ───────────────────────────────────────────────
--- setupHover / applyNoclip / stopFarm
+-- Hover / stopFarm
 -- ───────────────────────────────────────────────
 local function setupHover(hrp)
-    local bv = hrp:FindFirstChild("FarmBV")
-        or Instance.new("BodyVelocity", hrp)
+    local bv = hrp:FindFirstChild("FarmBV") or Instance.new("BodyVelocity", hrp)
     bv.Name     = "FarmBV"
     bv.MaxForce = Vector3.new(0, 1e6, 0)
     bv.P        = 1e5
@@ -196,47 +264,27 @@ local function setupHover(hrp)
     return bv
 end
 
-local function applyNoclip(char)
-    for _, p in ipairs(char:GetDescendants()) do
-        if p:IsA("BasePart") then p.CanCollide = false end
-    end
-end
-
 local function stopFarm(char, hrp, hum)
     if not char or not hrp or not hum then return end
     hum.PlatformStand = false
     local bv = hrp:FindFirstChild("FarmBV")
     if bv then bv:Destroy() end
-    for _, p in ipairs(char:GetDescendants()) do
-        if p:IsA("BasePart") then p.CanCollide = true end
-    end
+    restoreCollision(char)
 end
 
 -- ───────────────────────────────────────────────
--- Visited expiry loop (keeps the table bounded)
--- ───────────────────────────────────────────────
-task.spawn(function()
-    while running do
-        local now = tick()
-        for coin, t in pairs(visited) do
-            if now - t > 0.8 then visited[coin] = nil end
-        end
-        task.wait(0.8)
-    end
-end)
-
--- ───────────────────────────────────────────────
--- HEARTBEAT — main loop (runs every frame)
+-- HEARTBEAT
 -- ───────────────────────────────────────────────
 local farmConn
 farmConn = RNS.Heartbeat:Connect(function(dt)
     if not running then
         farmConn:Disconnect()
+        if noclipConn then noclipConn:Disconnect() end
         return
     end
 
     local char = lp.Character
-    local hum  = char and char:FindFirstChild("Humanoid")
+    local hum  = char and char:FindFirstChildOfClass("Humanoid")
     local hrp  = char and char:FindFirstChild("HumanoidRootPart")
     if not hum or not hrp or hum.Health <= 0 then return end
 
@@ -244,7 +292,7 @@ farmConn = RNS.Heartbeat:Connect(function(dt)
         if wasFarming then
             stopFarm(char, hrp, hum)
             wasFarming = false
-            visited    = {}
+            -- Do NOT wipe visited here; CoinsStarted resets it on round start.
         end
         return
     end
@@ -252,16 +300,16 @@ farmConn = RNS.Heartbeat:Connect(function(dt)
     if not wasFarming then
         wasFarming = true
         myRole     = getMyRole()
+        refreshHeadOffset(char)
+        applyNoclipOnce(char)
     end
 
     hum.PlatformStand = true
-    applyNoclip(char)
 
     local bv     = hrp:FindFirstChild("FarmBV") or setupHover(hrp)
     local myPos  = hrp.Position
     local danger = getDanger()
 
-    -- Immediate danger evasion: if any threat is inside 60% of its safe radius, flee.
     for _, d in ipairs(danger) do
         if (myPos - d.pos).Magnitude < d.dist * 0.6 then
             local away = myPos - d.pos
@@ -279,18 +327,17 @@ farmConn = RNS.Heartbeat:Connect(function(dt)
         return
     end
 
-    local target = Vector3.new(
-        coin.Position.X,
-        coin.Position.Y - HEAD_OFFSET,
-        coin.Position.Z
-    )
-    local diff = target - myPos
-    local dist = diff.Magnitude
+    local target = Vector3.new(coin.Position.X, coin.Position.Y - headOffset, coin.Position.Z)
+    local diff   = target - myPos
+    local dist   = diff.Magnitude
 
     if dist < COIN_REACH then
-        hrp.CFrame    = CFrame.new(target)
-        bv.Velocity   = Vector3.zero
-        visited[coin] = tick()
+        hrp.CFrame  = CFrame.new(target)
+        bv.Velocity = Vector3.zero
+        -- Server will fire CoinCollected and we'll mark visited via the
+        -- remote listener. We also pre-mark to avoid same-frame reselection.
+        local coinID = coin:GetAttribute("CoinID")
+        if coinID then visited[coinID] = true end
         return
     end
 
