@@ -175,14 +175,32 @@ class Session:
                 best, best_dist = key, d
         return (best, best_dist) if best else None
 
+    def _safe_send(self, payload: bytes) -> bool:
+        """transport.send wrapper that never raises into the farm loop.
+
+        Returns True on success, False on any send error. The method name
+        on the transport varies by Rakbot version — we try the common
+        candidates in order so this doesn't break when game_client changes
+        its external API.
+        """
+        for method_name in ("send", "send_data", "send_packet", "fire_remote"):
+            fn = getattr(self.transport, method_name, None)
+            if callable(fn):
+                try:
+                    fn(payload)
+                    return True
+                except Exception as e:
+                    self.emit({"event": "transport_err", "method": method_name,
+                               "err": repr(e)[:160]})
+                    return False
+        self.emit({"event": "transport_err", "err": "no send method on transport"})
+        return False
+
     def _fire_coin(self, coin_key) -> bool:
         payload = mm2_wire.getcoin_payload(self.inspector, coin_key)
         if payload is None:
             return False
-        try:
-            self.transport.send(payload)
-        except Exception as e:
-            self.emit({"event": "transport_err", "stage": "getcoin", "err": str(e)[:120]})
+        if not self._safe_send(payload):
             return False
         att = self.attempts.setdefault(coin_key, CoinAttempt())
         att.fires += 1
@@ -206,13 +224,10 @@ class Session:
         if payload is None:
             return
         self.next_invocation_id = min(self.next_invocation_id + 1, 2 ** 31 - 2)
-        try:
-            self.transport.send(payload)
+        if self._safe_send(payload):
             self.boxes_opened += 1
             self.emit({"event": "box_fired", "boxes_opened": self.boxes_opened,
                        "candies_before": candies})
-        except Exception as e:
-            self.emit({"event": "transport_err", "stage": "opencrate", "err": str(e)[:120]})
 
     # ── CoinsStarted / CoinCollected integration ──
     def on_coins_started(self):
@@ -244,15 +259,17 @@ class Session:
     def run(self, duration: Optional[float] = None, dry_run: bool = False):
         """Blocking loop at ``TICK`` cadence. ``duration`` in seconds (None = forever).
 
-        ``dry_run=True`` logs decisions WITHOUT calling ``transport.send``.
+        ``dry_run=True`` substitutes ``_safe_send`` with a logger — no bytes
+        leave the process.
         """
         deadline = (time.monotonic() + duration) if duration else math.inf
+        orig_safe_send = self._safe_send
         if dry_run:
-            orig_send = getattr(self.transport, "send", None)
             def _fake_send(payload):
                 self.emit({"event": "dry_send", "bytes": len(payload),
-                           "head": payload[:8].hex()})
-            self.transport.send = _fake_send  # type: ignore
+                           "head": payload[:12].hex()})
+                return True
+            self._safe_send = _fake_send  # type: ignore[method-assign]
         try:
             while time.monotonic() < deadline:
                 try:
@@ -264,4 +281,4 @@ class Session:
                 time.sleep(TICK)
         finally:
             if dry_run:
-                self.transport.send = orig_send  # type: ignore
+                self._safe_send = orig_safe_send  # type: ignore[method-assign]
