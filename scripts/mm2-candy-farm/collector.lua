@@ -1,6 +1,19 @@
 --[[
-    MM2 CANDY FARM — v0.34 (Curry Launcher)
+    MM2 CANDY FARM — v0.35 (Curry Launcher)
     =======================================
+    v0.35 STATIC-MODEL TELEPORT-STEP (operator: humanoid walk path
+    wasn't going through walls; wants the character model completely
+    frozen while HRP translates to each coin):
+    - HUMANIZED=false (back to CFrame-step path from v0.15-v0.22).
+    - PlatformStand=true so humanoid no longer drives animations or
+      state changes.
+    - FREEZE_ANIMATIONS=true: on engage and every frame, stop all
+      Animator:GetPlayingAnimationTracks(). Model is a static rig;
+      only HRP position changes.
+    - Full-axis hover BV (set by setupHover when HUMANIZED=false)
+      kills any residual drift so motion is 100% our CFrame writes.
+    - MICRO pauses / jump twitch disabled (ambient humanization off).
+
     v0.34 KILL THE REJOIN LOOP:
     - Operator: 'porque entro en un loop donde cada que empieza una
       ronda rejoinea?'. v0.31 hard-snap + 15s teleport rescue fired
@@ -266,18 +279,18 @@ local CONFIG = {
     STAB_RANGE              = 12,
     TIME_BETWEEN_STABS      = 1.5,
 
-    -- Movement (v0.23: humanized — humanoid walks with animations,
-    -- noclip still bypasses walls, final snap for pickup accuracy)
-    HUMANIZED               = true,    -- v0.23: use Humanoid:MoveTo + anims
-    SPEED                   = 16,      -- match humanoid walkspeed exactly
-    FORCE_WALKSPEED         = 16,
-    MAX_FRAME_STEP          = 0.3,
-    COOLDOWN_BETWEEN_COINS  = 0.2,
-    MICRO_PAUSE_MIN         = 0.05,    -- random reaction time between coins
-    MICRO_PAUSE_MAX         = 0.18,
-    SNAP_FINAL_DISTANCE     = 0,       -- v0.26: disabled — walk all the way in, no snap
-    JUMP_CHANCE             = 0.015,   -- occasional jump (human idle twitch)
-    JUMP_COOLDOWN           = 1.5,
+    -- Movement (v0.35: static model + CFrame teleport-step, noclip real)
+    HUMANIZED               = false,   -- v0.35: back to CFrame mode per op
+    FREEZE_ANIMATIONS       = true,    -- v0.35: stop all humanoid anim tracks
+    SPEED                   = 26,      -- CFrame cadence
+    FORCE_WALKSPEED         = 16,      -- humanoid declared speed (AC ref)
+    MAX_FRAME_STEP          = 1.1,
+    COOLDOWN_BETWEEN_COINS  = 0.1,
+    MICRO_PAUSE_MIN         = 0,
+    MICRO_PAUSE_MAX         = 0,
+    SNAP_FINAL_DISTANCE     = 0,
+    JUMP_CHANCE             = 0,
+    JUMP_COOLDOWN           = 999,
 
     -- Pathing intelligence (v0.19 softened)
     WALL_RAYCAST            = true,
@@ -479,27 +492,53 @@ end)
 
 -- v0.30: VISUAL-ONLY hide (CPU savings) — invisible walls/furniture
 -- but COLLISION PRESERVED so the character stands on the floor
--- normally. Fixes the "fall at round start" from v0.25-v0.29 where
--- making every map part CanCollide=false removed anything to stand on.
--- Excludes the coin parts themselves and anything tagged as a coin.
-local function hideMapVisual()
-    cacheCoinContainer()
-    if not coinContainer then return 0 end
-    local root = coinContainer.Parent
+-- normally. Skips coins and the character.
+local function hideModelVisual(root)
     if not root then return 0 end
+    local lp = Players.LocalPlayer
+    local myChar = lp and lp.Character
     local count = 0
     for _, p in ipairs(root:GetDescendants()) do
-        if p:IsA("BasePart") and not p:IsDescendantOf(coinContainer) then
-            -- Skip anything with the CoinVisual tag or named Coin_*
+        if p:IsA("BasePart") then
             local name = p.Name
-            if not (name:find("Coin") or name:find("Candy")) then
+            local isCoin = name:find("Coin") or name:find("Candy")
+            local isMine = myChar and p:IsDescendantOf(myChar)
+            if not isCoin and not isMine then
                 if p.Transparency < 1 then p.Transparency = 1 end
                 if p.CastShadow then p.CastShadow = false end
                 count = count + 1
             end
         end
     end
-    dlog(("map visual-hide applied: %d parts"):format(count))
+    return count
+end
+
+local function hideMapVisual()
+    cacheCoinContainer()
+    if not coinContainer then return 0 end
+    local n = hideModelVisual(coinContainer.Parent)
+    dlog(("map visual-hide applied: %d parts"):format(n))
+    return n
+end
+
+-- v0.35: lobby visual hide. MM2 lobby often lives in workspace.Lobby
+-- or just as a bunch of top-level Models. We hide everything in
+-- workspace that isn't a player character, the coinContainer, or the
+-- current round map.
+local function hideLobbyVisual()
+    local lp = Players.LocalPlayer
+    local myChar = lp and lp.Character
+    local roundMap = coinContainer and coinContainer.Parent
+    local count = 0
+    for _, child in ipairs(workspace:GetChildren()) do
+        if child ~= myChar and child ~= roundMap
+           and not child:FindFirstChildOfClass("Humanoid") then
+            if child:IsA("Model") or child:IsA("BasePart") or child:IsA("Folder") then
+                count = count + hideModelVisual(child)
+            end
+        end
+    end
+    dlog(("lobby visual-hide applied: %d parts"):format(count))
     return count
 end
 
@@ -614,6 +653,14 @@ if CONFIG.AUTO_REJOIN then
 end
 
 -- ───────────────────────────────────────────────
+-- v0.35: periodic lobby visual-hide
+task.spawn(function()
+    while running do
+        pcall(hideLobbyVisual)
+        task.wait(8)
+    end
+end)
+
 -- v0.30: stall watchdog — if no pickup in STALL_NO_PICKUP_WINDOW
 -- seconds while farming, teleport to a fresh server (instance).
 -- ───────────────────────────────────────────────
@@ -1016,10 +1063,18 @@ farmConn = RNS.Heartbeat:Connect(function(dt)
         refreshHeadOffset(char)
         smoothDir  = Vector3.new(hrp.CFrame.LookVector.X, 0, hrp.CFrame.LookVector.Z)
         if smoothDir.Magnitude < 0.01 then smoothDir = Vector3.new(0,0,1) else smoothDir = smoothDir.Unit end
-        -- v0.29: set up hover BV AT THE INSTANT noclip engages so the
-        -- character never has a gravity frame without vertical hold
+        -- v0.29: hover BV at engage so no gravity gap
         local bvEarly = setupHover(hrp)
         bvEarly.Velocity = Vector3.new(0, 0, 0)
+        -- v0.35: freeze all humanoid animations so model is static
+        if CONFIG.FREEZE_ANIMATIONS then
+            local animator = hum:FindFirstChildOfClass("Animator")
+            if animator then
+                for _, track in ipairs(animator:GetPlayingAnimationTracks()) do
+                    pcall(function() track:Stop(0) end)
+                end
+            end
+        end
         dlog(("ENGAGE: role=%s head=%.2f speed=%d"):format(myRole, headOffset, CONFIG.SPEED))
         dsync("myRole", myRole)
         dsync("wasFarming", true)
@@ -1038,6 +1093,17 @@ farmConn = RNS.Heartbeat:Connect(function(dt)
         hum.PlatformStand = false
     else
         hum.PlatformStand = true
+        -- v0.35: keep stopping animations each frame — PlatformStand
+        -- alone doesn't always kill them (some are triggered by state
+        -- changes). This guarantees a fully static model.
+        if CONFIG.FREEZE_ANIMATIONS then
+            local animator = hum:FindFirstChildOfClass("Animator")
+            if animator then
+                for _, track in ipairs(animator:GetPlayingAnimationTracks()) do
+                    pcall(function() track:Stop(0) end)
+                end
+            end
+        end
     end
 
     -- v0.21: STOP_AT_CANDIES — idle (like lobby) once threshold reached.
