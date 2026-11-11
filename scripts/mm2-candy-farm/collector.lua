@@ -1,6 +1,22 @@
 --[[
-    MM2 CANDY FARM — v0.42 (Curry Launcher)
+    MM2 CANDY FARM — v0.43 (Curry Launcher)
     =======================================
+    v0.43 NO MORE MAP-COLLISION STRIP + STATIC WHEN NO TARGET
+    (operator: 10s countdown ends, character falls through floor,
+    rescue CFrame to top damages via fall; also when no coin is
+    detected the bot should stay static not drift/fall):
+    - noclipEntireMap() call on CoinsStarted removed. Map keeps its
+      CanCollide=true so the character has a real floor to stand on.
+    - XZ/above/below-map rescue snap DELETED — it was the source of
+      the fall-damage teleport.
+    - No-coin branch now pins hrp.CFrame = currentPos every frame so
+      the bot holds its Y and XZ exactly (no fall, no drift).
+    - FREEZE_ANIMATIONS stays true from v0.42: player model stays
+      in a frozen pose while MoveTo slides it between coins —
+      movement "parece walk" without a walking animation playing.
+    - Character-side noclip (Stepped, per-frame CanCollide=false
+      on char parts) is kept so walls are still passable.
+
     v0.42 ADDITIONS TO v0.26 (operator's preferred baseline):
     - FREEZE_ANIMATIONS=true: humanoid still runs MoveTo (physical
       movement intact) but every playing animation track is stopped
@@ -445,13 +461,11 @@ CoinsStarted.OnClientEvent:Connect(function()
     roundStartAt = os.clock()
     candiesThisRound = 0
     dsync("candiesThisRound", 0)
-    -- v0.25: strip the whole map's collision so nothing can wedge us
-    task.spawn(function()
-        task.wait(0.8)  -- let map load fully
-        local n = noclipEntireMap()
-        dsync("mapNoclipParts", n)
-    end)
-    dlog("CoinsStarted: new round")
+    -- v0.43: NO map-wide noclip (caused the fall-through-floor at
+    -- round start when the countdown ended). Character-side noclip
+    -- still runs via Stepped so we pass through walls anyway.
+    dsync("mapNoclipParts", 0)
+    dlog("CoinsStarted: new round (map collision preserved)")
 end)
 
 -- ───────────────────────────────────────────────
@@ -857,35 +871,12 @@ farmConn = RNS.Heartbeat:Connect(function(dt)
     local mySpeed  = math.max(1, hum.WalkSpeed)
     local threats, murderer = getWorldThreats()
 
-    -- Below-map / out-of-map rescue (v0.20: covers XZ bounds too, not only Y)
-    if coinContainer and coinContainer.Parent then
-        local parent = coinContainer.Parent
-        if parent and parent:IsA("Model") then
-            local ok, cf, size = pcall(parent.GetBoundingBox, parent)
-            if ok then
-                local bottom = cf.Position.Y - size.Y/2
-                local top    = cf.Position.Y + size.Y/2
-                local halfX = size.X/2 + CONFIG.MAP_MARGIN
-                local halfZ = size.Z/2 + CONFIG.MAP_MARGIN
-                local dx = myPos.X - cf.Position.X
-                local dz = myPos.Z - cf.Position.Z
-                local belowMap = myPos.Y < bottom + CONFIG.BELOW_MAP_Y_DELTA
-                local aboveMap = myPos.Y > top + 3    -- v0.22: on-roof rescue
-                local outsideXZ = math.abs(dx) > halfX or math.abs(dz) > halfZ
-                if belowMap or aboveMap or outsideXZ then
-                    local rescue = mapCenterTop()
-                    if rescue then
-                        hrp.CFrame = CFrame.new(rescue)
-                        bv.Velocity = Vector3.zero
-                        tripTarget = nil
-                        parkedCoin, parkedUntil = nil, 0
-                        dlog("rescue: outside-map snap")
-                        return
-                    end
-                end
-            end
-        end
-    end
+    -- v0.43: out-of-map rescue DISABLED — the CFrame snap to center
+    -- was causing the "fall at round start + damage from rescue
+    -- teleport" bug. Floor collision now preserved (map parts keep
+    -- CanCollide=true) so the character stands on the floor naturally
+    -- and never falls through. If somehow we do fall, the stuck
+    -- watchdog (180s) still handles it as a last resort.
 
     -- ─── COMBAT MODE (disabled in v0.13) ───
     if CONFIG.COMBAT_ENABLED and candiesThisRound >= CONFIG.COMBAT_AT_CANDIES then
@@ -996,28 +987,13 @@ farmConn = RNS.Heartbeat:Connect(function(dt)
     -- Pick a coin (operating on Coin_Server parts)
     local coin = getBestCoin(myPos, mySpeed)
     if not coin then
-        -- v0.20: if there ARE coins but all beyond MAX_PICK_DISTANCE,
-        -- check nearest unclaimed coin distance; if > RESCUE threshold,
-        -- snap toward map center to recover from being out of bounds.
-        local nearest = math.huge
-        for _, visual in ipairs(CollectionService:GetTagged("CoinVisual")) do
-            local sp = visual.Parent
-            if sp and sp:IsA("BasePart") and not visual:GetAttribute("Collected") then
-                local d = (sp.Position - myPos).Magnitude
-                if d < nearest then nearest = d end
-            end
-        end
-        if nearest > CONFIG.RESCUE_IF_NO_COIN_WITHIN then
-            local rescue = mapCenterTop()
-            if rescue then
-                hrp.CFrame = CFrame.new(rescue)
-                bv.Velocity = Vector3.zero
-                tripTarget = nil
-                dlog(("rescue: no coin within %d (nearest=%d)"):format(CONFIG.RESCUE_IF_NO_COIN_WITHIN, nearest))
-                return
-            end
-        end
+        -- v0.43: no coin detected -> freeze HRP in place (hold Y so
+        -- we don't fall through floor via noclip). No rescue teleport,
+        -- no gravity drift. Bot acts like a static AFK player until
+        -- a coin shows up.
+        hrp.CFrame = CFrame.new(myPos)  -- pin current position
         bv.Velocity = Vector3.zero
+        if CONFIG.HUMANIZED then hum:MoveTo(myPos) end
         tripTarget = nil
         dsync("tripCoinID", "none")
         return
